@@ -66,10 +66,13 @@ export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(request.url);
-    if (url.pathname === "/google/callback") return handleCalendarRequest(request, env, null);
-    if (url.pathname === "/google/connect") {
-      const user = await currentUser(request, env);
-      return handleCalendarRequest(request, env, user);
+    if (url.pathname === "/google/callback" || url.pathname === "/google/connect") {
+      try {
+        const user = url.pathname === "/google/connect" ? await currentUser(request, env) : null;
+        return await handleCalendarRequest(request, env, user);
+      } catch (error) {
+        return json({ error: String(error?.message || error) }, 500);
+      }
     }
     if (request.method === "GET") return json({ ok: true, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
