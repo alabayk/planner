@@ -36,7 +36,7 @@
     <p id="lastUpdated" class="lastUpdated"></p>
     <button id="add" aria-label="Добавить">＋</button>
     <footer><button class="active" data-view="day"><i>⌾</i><span>Календарь</span></button><button data-view="all"><i>≡</i><span>Все планы</span></button><button data-view="tasks"><i>✓</i><span>Дела</span></button></footer>
-    <aside id="sideMenu" class="sideMenu" hidden><button id="menuBackdrop" class="menuBackdrop" aria-label="Закрыть меню"></button><section><div class="menuProfile"><span id="menuAvatar" class="menuAvatar">П</span><div><b>Профиль</b><small>Оформление приложения</small></div></div><button id="openProfile" class="menuItem"><span>Профиль</span><i>›</i></button><button id="logout" class="menuItem logout"><span>Выйти</span><i>↗</i></button></section></aside>
+    <aside id="sideMenu" class="sideMenu" hidden><button id="menuBackdrop" class="menuBackdrop" aria-label="Закрыть меню"></button><section><div class="menuProfile"><span id="menuAvatar" class="menuAvatar">П</span><div><b>Профиль</b><small>Оформление приложения</small></div></div><button id="openProfile" class="menuItem"><span>Профиль</span><i>›</i></button><button id="connectCalendar" class="menuItem"><span>Подключить Google Calendar</span><i>›</i></button><button id="logout" class="menuItem logout"><span>Выйти</span><i>↗</i></button></section></aside>
   </main>
 
   <dialog id="editor">
@@ -79,6 +79,6 @@
 
   <template id="card"><article><button class="check" aria-label="Готово"></button><div class="cardBody"><time></time><h3></h3><p></p></div><button class="more" aria-label="Действия">•••</button></article></template>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script type="module" src="./app.js?v=50"></script>
+  <script type="module" src="./app.js?v=51"></script>
 </body>
 </html>

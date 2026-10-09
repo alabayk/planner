@@ -1,4 +1,5 @@
 import webpush from "web-push";
+import { handleCalendarRequest, syncCalendars } from "./calendar.js";
 
 const allowedOrigin = "https://alabayk.github.io";
 const cors = {
@@ -64,7 +65,13 @@ async function deliverQueue(env) {
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
-    if (request.method === "GET") return json({ ok: true, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY) });
+    const url = new URL(request.url);
+    if (url.pathname === "/google/callback") return handleCalendarRequest(request, env, null);
+    if (url.pathname === "/google/connect") {
+      const user = await currentUser(request, env);
+      return handleCalendarRequest(request, env, user);
+    }
+    if (request.method === "GET") return json({ ok: true, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
     try {
       const user = await currentUser(request, env);
@@ -111,6 +118,6 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(deliverQueue(env));
+    ctx.waitUntil(Promise.all([deliverQueue(env), syncCalendars(env)]));
   },
 };
