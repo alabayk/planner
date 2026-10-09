@@ -1,6 +1,6 @@
 const GOOGLE = "https://www.googleapis.com/calendar/v3";
 const BOTH = "\n[[planner:both]]";
-const MAX_WRITES = 50;
+const MAX_WRITES = 10;
 
 const ownerOf = user => (user?.email || "").split("@")[0];
 const ordinary = row => row.notes !== "__todo__" && !(row.notes || "").startsWith("[[deadline]]");
