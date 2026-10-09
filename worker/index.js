@@ -1,7 +1,7 @@
 import webpush from "web-push";
 import { handleCalendarRequest, syncCalendars } from "./calendar.js";
 
-const allowedOrigin = "https://alabayk.github.io";
+const allowedOrigin = "*";
 const cors = {
   "Access-Control-Allow-Origin": allowedOrigin,
   "Access-Control-Allow-Headers": "authorization, content-type",
