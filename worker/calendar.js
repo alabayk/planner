@@ -174,6 +174,12 @@ export async function handleCalendarRequest(request, env, user) {
     await syncCalendars(env);
     return new Response("Календарь подключён и синхронизирован. Можно закрыть эту страницу.", { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
+  if (url.pathname === "/google/status" && request.method === "GET") {
+    if (!user?.id) return Response.json({ connected: false }, { status: 401, headers: { "Access-Control-Allow-Origin": "*" } });
+    const owner = ownerOf(user);
+    const tokens = await admin(env, `planner_google_tokens?select=calendar_id,updated_at&owner=eq.${encodeURIComponent(owner)}`);
+    return Response.json({ connected: Boolean(tokens[0]?.calendar_id), updatedAt: tokens[0]?.updated_at || null }, { headers: { "Access-Control-Allow-Origin": "*" } });
+  }
   if (url.pathname !== "/google/connect" || request.method !== "POST") return null;
   if (!user?.id) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const owner = ownerOf(user); if (!owner) return Response.json({ error: "Unknown owner" }, { status: 403 });
