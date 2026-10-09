@@ -101,7 +101,7 @@ async function syncOwner(env, tokenRow) {
       writes++; continue;
     }
     if (!shouldExist && !saved) continue;
-    if (!saved && (row.deleted || new Date(row.starts_at) < new Date(Date.now() - 86400000))) continue;
+    if (!saved && row.deleted) continue;
     if (saved && !event) { await conflict(env, row.id, owner, "Связанное событие Google не найдено"); continue; }
     const plannerChanged = saved && await hash(row) !== saved.planner_signature;
     const googleChanged = saved && event && event.etag !== saved.google_etag;
