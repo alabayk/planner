@@ -92,7 +92,8 @@ async function syncOwner(env, tokenRow) {
   const byPlanner = new Map(links.map(x => [x.planner_id, x])), linkedGoogle = new Set(links.map(x => x.google_id));
   let writes = 0;
   for (const row of rows) {
-    if (writes >= MAX_WRITES || !ordinary(row)) break;
+  if (writes >= MAX_WRITES) break;
+  if (!ordinary(row)) continue;
     const saved = byPlanner.get(row.id), shouldExist = wanted(row, owner), event = saved && remote.get(saved.google_id);
     if (saved && !shouldExist && !row.deleted) {
       if (event && event.status !== "cancelled") await google(eventUrl(calendar, saved.google_id), token, { method: "DELETE" });
