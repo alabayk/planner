@@ -179,6 +179,6 @@ export async function handleCalendarRequest(request, env, user) {
   const state = crypto.randomUUID();
   await admin(env, "planner_google_states", { method: "POST", body: JSON.stringify({ state, owner, expires_at: new Date(Date.now() + 600000).toISOString() }) });
   const params = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: `${url.origin}/google/callback`,
-    response_type: "code", access_type: "offline", prompt: "consent", scope: "openid email https://www.googleapis.com/auth/calendar", state });
+    response_type: "code", access_type: "offline", prompt: "consent", scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar", state });
   return Response.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params}` }, { headers: { "Access-Control-Allow-Origin": "*" } });
 }
