@@ -171,7 +171,8 @@ export async function handleCalendarRequest(request, env, user) {
       body: JSON.stringify({ owner, refresh_token: refresh, access_token: result.access_token,
         expires_at: Date.now() + result.expires_in * 1000, calendar_id: calendar, updated_at: new Date().toISOString() }) });
     await admin(env, `planner_google_states?state=eq.${encodeURIComponent(state)}`, { method: "DELETE" });
-    return new Response("Календарь подключён. Можно закрыть эту страницу.", { headers: { "content-type": "text/plain; charset=utf-8" } });
+    await syncCalendars(env);
+    return new Response("Календарь подключён и синхронизирован. Можно закрыть эту страницу.", { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
   if (url.pathname !== "/google/connect" || request.method !== "POST") return null;
   if (!user?.id) return Response.json({ error: "Unauthorized" }, { status: 401 });
