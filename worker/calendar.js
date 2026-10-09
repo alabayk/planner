@@ -122,7 +122,16 @@ async function syncOwner(env, tokenRow) {
       await saveLink(env, row, owner, updated); writes++;
     } else {
       const id = `p${row.id.replaceAll("-", "").toLowerCase()}`;
-      const created = await google(eventUrl(calendar), token, { method: "POST", body: JSON.stringify({ id, ...googleBody(row) }) });
+      let created;
+      try {
+        created = await google(eventUrl(calendar), token, { method: "POST", body: JSON.stringify({ id, ...googleBody(row) }) });
+      } catch (error) {
+        if (!String(error?.message || error).startsWith("Google 409:")) throw error;
+        const existing = await google(eventUrl(calendar, id), token);
+        created = existing.status === "cancelled"
+          ? await google(eventUrl(calendar), token, { method: "POST", body: JSON.stringify(googleBody(row)) })
+          : existing;
+      }
       await saveLink(env, row, owner, created); linkedGoogle.add(created.id); writes++;
     }
   }
