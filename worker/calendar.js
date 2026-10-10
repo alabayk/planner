@@ -103,6 +103,11 @@ async function syncOwner(env, tokenRow) {
     if (!shouldExist && !saved) continue;
     if (!saved && row.deleted) continue;
     if (saved && !event) { await conflict(env, row.id, owner, "Связанное событие Google не найдено"); continue; }
+    if (saved && event && shared(row) && !event.extendedProperties?.private?.plannerId) {
+      const updated = await admin(env, `planner_events?id=eq.${row.id}`, { method: "PATCH", headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ notes: cleanNotes(row.notes), version: Number(row.version) + 1, updated_at: new Date().toISOString() }) });
+      await saveLink(env, updated[0], owner, event); writes++; continue;
+    }
     const plannerChanged = saved && await hash(row) !== saved.planner_signature;
     const googleChanged = saved && event && event.etag !== saved.google_etag;
     if (plannerChanged && googleChanged) { await conflict(env, row.id, owner, "Обе стороны изменены"); continue; }
