@@ -142,7 +142,7 @@ async function syncOwner(env, tokenRow) {
     try {
       const fields = plannerFields(event), id = crypto.randomUUID();
       const inserted = await admin(env, "planner_events", { method: "POST", headers: { Prefer: "return=representation" },
-        body: JSON.stringify({ id, ...fields, notes: fields.notes + BOTH, space: "shared", created_by: owner,
+        body: JSON.stringify({ id, ...fields, notes: fields.notes, space: "shared", created_by: owner,
           done: false, deleted: false, version: 1, updated_at: new Date().toISOString() }) });
       await saveLink(env, inserted[0], owner, event); writes++;
     } catch (error) { await conflict(env, id, owner, String(error.message || error)); }
