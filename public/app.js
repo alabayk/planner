@@ -78,6 +78,53 @@ $('#closeLogin').onclick=$('#cancelLogin').onclick=closeLogin;
 $('#login').onclick=e=>{if(e.target===$('#login'))closeLogin()};
 $('#loginForm').onsubmit=async e=>{e.preventDefault();const person=state.pendingUser,pin=$('#pin').value,button=e.submitter;button.disabled=true;$('#loginError').hidden=true;const {error}=await client.auth.signInWithPassword({email:`${person}@planer.app`,password:pin});button.disabled=false;if(error){$('#loginError').textContent='Неверный PIN-код';$('#loginError').hidden=false;return}closeLogin();state.user=person;start()};
 document.querySelectorAll('[data-person]').forEach(b=>b.onclick=()=>openLogin(b.dataset.person));
+let pullRefreshing=false;
+async function refreshEverything(){
+  if(pullRefreshing||!state.user)return;
+  pullRefreshing=true;
+  const indicator=$('#pullRefresh');
+  indicator.className='pullRefresh refreshing';
+  indicator.innerHTML='<i></i><span>Обновляем…</span>';
+  try{
+    const {data:{session}}=await client.auth.getSession();
+    if(!session)throw new Error('Сессия истекла');
+    if(!navigator.onLine)throw new Error('Нет подключения к интернету');
+    const response=await fetch(CALENDAR_SYNC_URL+'/google/sync',{method:'POST',headers:{Authorization:`Bearer ${session.access_token}`}});
+    if(!response.ok){let message='Не удалось обновить календарь';try{message=(await response.json()).error||message}catch{}throw new Error(message)}
+    await sync();
+    indicator.className='pullRefresh done';
+    indicator.innerHTML='<b>✓</b><span>Обновлено</span>';
+  }catch(error){
+    await sync();
+    indicator.className='pullRefresh failed';
+    indicator.innerHTML='<b>!</b><span>'+String(error.message||error)+'</span>';
+  }finally{
+    setTimeout(()=>{indicator.className='pullRefresh';indicator.style.setProperty('--pull','0px');pullRefreshing=false},1300);
+  }
+}
+function setupPullToRefresh(){
+  if($('#pullRefresh'))return;
+  const indicator=document.createElement('div');indicator.id='pullRefresh';indicator.className='pullRefresh';indicator.setAttribute('aria-live','polite');indicator.innerHTML='<i></i><span>Потяните для обновления</span>';document.body.append(indicator);
+  let startX=0,startY=0,distance=0,tracking=false,vertical=false,touchId=null;
+  const point=list=>Array.from(list).find(t=>t.identifier===touchId);
+  document.addEventListener('touchstart',event=>{
+    if(pullRefreshing||window.scrollY>1||event.touches.length!==1||event.target.closest('input,textarea,select,dialog'))return;
+    const touch=event.touches[0];touchId=touch.identifier;startX=touch.clientX;startY=touch.clientY;distance=0;tracking=true;vertical=false;
+  },{passive:true});
+  document.addEventListener('touchmove',event=>{
+    if(!tracking)return;const touch=point(event.touches);if(!touch)return;
+    const dx=touch.clientX-startX,dy=touch.clientY-startY;
+    if(!vertical){if(Math.abs(dx)<8&&Math.abs(dy)<8)return;if(dy<=0||Math.abs(dx)>=Math.abs(dy)){tracking=false;return}vertical=true}
+    if(window.scrollY>1||dy<=0){tracking=false;return}
+    event.preventDefault();distance=Math.min(104,Math.pow(dy,.82)*2.15);indicator.style.setProperty('--pull',distance+'px');
+    indicator.classList.toggle('ready',distance>=72);indicator.querySelector('span').textContent=distance>=72?'Отпустите для обновления':'Потяните для обновления';
+  },{passive:false});
+  document.addEventListener('touchend',()=>{
+    if(!tracking)return;tracking=false;
+    if(vertical&&distance>=72)refreshEverything();else{indicator.className='pullRefresh';indicator.style.setProperty('--pull','0px')}
+  },{passive:true});
+  document.addEventListener('touchcancel',()=>{tracking=false;indicator.className='pullRefresh';indicator.style.setProperty('--pull','0px')},{passive:true});
+}
 function swipe(area,root,change,disabled=()=>false){let x=0,y=0,lastX=0,lastY=0,active=false,horizontal=false,animating=false,suppressClickUntil=0,touchId=null;const reset=()=>{root.style.transition='transform .16s ease-out,opacity .16s ease-out';root.style.transform='translate3d(0,0,0)';root.style.opacity='1'},point=list=>Array.from(list).find(t=>t.identifier===touchId);area.addEventListener('touchstart',e=>{if(animating||disabled()||e.touches.length!==1||e.target.closest('input,textarea,select,dialog'))return;const t=e.touches[0];touchId=t.identifier;x=lastX=t.clientX;y=lastY=t.clientY;active=true;horizontal=false;root.style.transition='none'},{passive:true});area.addEventListener('touchmove',e=>{if(!active)return;const t=point(e.touches);if(!t)return;lastX=t.clientX;lastY=t.clientY;const dx=lastX-x,dy=lastY-y;if(!horizontal){if(Math.abs(dx)<9&&Math.abs(dy)<9)return;if(Math.abs(dy)>=Math.abs(dx)){active=false;reset();return}horizontal=true}e.preventDefault();const shift=Math.max(-115,Math.min(115,dx*.72));root.style.transform=`translate3d(${shift}px,0,0)`;root.style.opacity=1-Math.abs(shift)/360},{passive:false});area.addEventListener('touchend',e=>{if(!active)return;const t=point(e.changedTouches);active=false;if(t){lastX=t.clientX;lastY=t.clientY}const dx=lastX-x,dy=lastY-y;if(horizontal&&Math.abs(dx)>48&&Math.abs(dx)>Math.abs(dy)*1.1){suppressClickUntil=Date.now()+350;animating=true;slideChange(root,dx<0?1:-1,change,()=>animating=false)}else reset()},{passive:true});area.addEventListener('touchcancel',()=>{active=false;horizontal=false;reset()},{passive:true});area.addEventListener('click',e=>{if(Date.now()<suppressClickUntil){e.preventDefault();e.stopPropagation()}},true)}
 swipe($('#spaces'),$('#spaces'),changeDay,()=>state.all||state.tasks||state.month);swipe($('#days'),$('#days'),changeWeek);
 async function migrateLoadedEvents(){const cutoff=new Date('2026-09-13T18:24:00.000Z'),events=state.events.filter(e=>!e.deleted&&e.space!=='shared'&&e.notes!=='__todo__'&&!isDeadline(e)&&new Date(e.updatedAt||0)<=cutoff);if(!events.length)return;for(const event of events)await post({...event,space:'shared'});await sync()}
@@ -86,6 +133,6 @@ const OCTOBER_SCHEDULE=[['b26e1005-0000-4000-8000-000000000001','2026-10-05T09:0
 ALL_SCHEDULE.push(...OCTOBER_SCHEDULE);
 async function seedSchedule(){const ids=ALL_SCHEDULE.map(x=>x[0]),{data,error}=await client.from('planner_events').select('id').in('id',ids);if(error)throw error;const existing=new Set(data.map(x=>x.id)),missing=ALL_SCHEDULE.filter(x=>!existing.has(x[0])).map(([id,startsAt,title,notes])=>toRow({id,title,notes,startsAt:new Date(startsAt).toISOString(),durationMinutes:80,space:'shared',createdBy:'ksusha',done:false,deleted:false,version:0}));if(missing.length){const{error:insertError}=await client.from('planner_events').insert(missing);if(insertError)throw insertError;await sync()}}
 function scheduleMidnightRefresh(){const next=new Date();next.setHours(24,0,1,0);setTimeout(()=>{state.date=new Date();render();cacheWeeks().catch(()=>{});scheduleMidnightRefresh()},next-Date.now())}
-async function start(){if(!state.user)return;state.hidePersonal=localStorage.getItem(`hide-personal-${state.user}`)==='1';document.body.dataset.user=state.user;document.querySelector('meta[name="theme-color"]').content=state.user==='vanya'?'#63b795':'#f486a8';$('#chooser').hidden=true;$('#app').hidden=false;renderProfilePhoto();refreshCalendarStatus().catch(()=>{});state.events=await all('events');render();await sync();await seedSchedule().catch(error=>{$('#offline').hidden=false;$('#offline').textContent='Не удалось загрузить расписание · '+error.message});await migrateLoadedEvents().catch(error=>{$('#offline').hidden=false;$('#offline').textContent='Не удалось перенести старые события · '+error.message});if('Notification'in window&&Notification.permission==='granted')ensureNotifications().catch(()=>localStorage.removeItem(`push-registered-${state.user}`));state.events.filter(e=>!e.deleted&&isDeadline(e)&&e.createdBy===state.user&&new Date(e.startsAt)>new Date()).forEach(e=>queueDeadline(e,false).catch(()=>{}));client.channel('planner-live').on('postgres_changes',{event:'*',schema:'public',table:'planner_events'},sync).subscribe();window.addEventListener('online',sync);window.addEventListener('pageshow',()=>sync());document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync()});navigator.storage?.persist?.().catch(()=>{});scheduleMidnightRefresh()}
+async function start(){if(!state.user)return;state.hidePersonal=localStorage.getItem(`hide-personal-${state.user}`)==='1';document.body.dataset.user=state.user;document.querySelector('meta[name="theme-color"]').content=state.user==='vanya'?'#63b795':'#f486a8';$('#chooser').hidden=true;$('#app').hidden=false;setupPullToRefresh();renderProfilePhoto();refreshCalendarStatus().catch(()=>{});state.events=await all('events');render();await sync();await seedSchedule().catch(error=>{$('#offline').hidden=false;$('#offline').textContent='Не удалось загрузить расписание · '+error.message});await migrateLoadedEvents().catch(error=>{$('#offline').hidden=false;$('#offline').textContent='Не удалось перенести старые события · '+error.message});if('Notification'in window&&Notification.permission==='granted')ensureNotifications().catch(()=>localStorage.removeItem(`push-registered-${state.user}`));state.events.filter(e=>!e.deleted&&isDeadline(e)&&e.createdBy===state.user&&new Date(e.startsAt)>new Date()).forEach(e=>queueDeadline(e,false).catch(()=>{}));client.channel('planner-live').on('postgres_changes',{event:'*',schema:'public',table:'planner_events'},sync).subscribe();window.addEventListener('online',sync);window.addEventListener('pageshow',()=>sync());document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync()});navigator.storage?.persist?.().catch(()=>{});scheduleMidnightRefresh()}
 async function boot(){const {data}=await client.auth.getSession(),email=data.session?.user?.email||'';state.user=email.startsWith('vanya@')?'vanya':email.startsWith('ksusha@')?'ksusha':'';if(state.user)start()}
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js');setInterval(updateCurrentTimeLine,30000);boot();
