@@ -181,8 +181,15 @@ export async function handleCalendarRequest(request, env, user) {
     const old = await admin(env, `planner_google_tokens?select=*&owner=eq.${encodeURIComponent(owner)}`), refresh = result.refresh_token || old[0]?.refresh_token;
     if (!refresh) return new Response("Google не выдал токен обновления", { status: 400 });
     let calendar = old[0]?.calendar_id;
-    if (!calendar) calendar = (await google(`${GOOGLE}/calendars`, result.access_token, { method: "POST",
-      body: JSON.stringify({ summary: "Планер — личный календарь", timeZone: "Europe/Moscow" }) })).id;
+    if (!calendar) {
+      try {
+        calendar = (await google(`${GOOGLE}/calendars`, result.access_token, { method: "POST",
+          body: JSON.stringify({ summary: "Планер — личный календарь", timeZone: "Europe/Moscow" }) })).id;
+      } catch (error) {
+        if (!String(error?.message || error).includes("ACCESS_TOKEN_SCOPE_INSUFFICIENT")) throw error;
+        calendar = "primary";
+      }
+    }
     await admin(env, "planner_google_tokens?on_conflict=owner", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" },
       body: JSON.stringify({ owner, refresh_token: refresh, access_token: result.access_token,
         expires_at: Date.now() + result.expires_in * 1000, calendar_id: calendar, updated_at: new Date().toISOString() }) });
@@ -195,6 +202,11 @@ export async function handleCalendarRequest(request, env, user) {
     const owner = ownerOf(user);
     const tokens = await admin(env, `planner_google_tokens?select=calendar_id,updated_at&owner=eq.${encodeURIComponent(owner)}`);
     return Response.json({ connected: Boolean(tokens[0]?.calendar_id), updatedAt: tokens[0]?.updated_at || null }, { headers: { "Access-Control-Allow-Origin": "*" } });
+  }
+  if (url.pathname === "/google/sync" && request.method === "POST") {
+    if (!user?.id) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Access-Control-Allow-Origin": "*" } });
+    await syncCalendars(env);
+    return Response.json({ ok: true }, { headers: { "Access-Control-Allow-Origin": "*" } });
   }
   if (url.pathname !== "/google/connect" || request.method !== "POST") return null;
   if (!user?.id) return Response.json({ error: "Unauthorized" }, { status: 401 });
