@@ -91,6 +91,19 @@ async function syncOwner(env, tokenRow) {
   const remote = await listEvents(token, calendar), byId = new Map(rows.map(x => [x.id, x]));
   const byPlanner = new Map(links.map(x => [x.planner_id, x])), linkedGoogle = new Set(links.map(x => x.google_id));
   let writes = 0;
+  for (const [id, event] of remote) {
+    if (writes >= MAX_WRITES) break;
+    if (linkedGoogle.has(id) || event.status === "cancelled") continue;
+    const known = event.extendedProperties?.private?.plannerId, row = byId.get(known);
+    if (row && wanted(row, owner)) { await saveLink(env, row, owner, event); writes++; continue; }
+    try {
+      const fields = plannerFields(event), id = crypto.randomUUID();
+      const inserted = await admin(env, "planner_events", { method: "POST", headers: { Prefer: "return=representation" },
+        body: JSON.stringify({ id, ...fields, notes: fields.notes, space: "shared", created_by: owner,
+          done: false, deleted: false, version: 1, updated_at: new Date().toISOString() }) });
+      await saveLink(env, inserted[0], owner, event); writes++;
+    } catch (error) { await conflict(env, id, owner, String(error.message || error)); }
+  }
   for (const row of rows) {
   if (writes >= MAX_WRITES) break;
   if (!ordinary(row)) continue;
@@ -140,18 +153,7 @@ async function syncOwner(env, tokenRow) {
       await saveLink(env, row, owner, created); linkedGoogle.add(created.id); writes++;
     }
   }
-  for (const [id, event] of remote) {
-    if (writes >= MAX_WRITES || linkedGoogle.has(id) || event.status === "cancelled") continue;
-    const known = event.extendedProperties?.private?.plannerId, row = byId.get(known);
-    if (row && wanted(row, owner)) { await saveLink(env, row, owner, event); continue; }
-    try {
-      const fields = plannerFields(event), id = crypto.randomUUID();
-      const inserted = await admin(env, "planner_events", { method: "POST", headers: { Prefer: "return=representation" },
-        body: JSON.stringify({ id, ...fields, notes: fields.notes, space: "shared", created_by: owner,
-          done: false, deleted: false, version: 1, updated_at: new Date().toISOString() }) });
-      await saveLink(env, inserted[0], owner, event); writes++;
-    } catch (error) { await conflict(env, id, owner, String(error.message || error)); }
-  }
+
 }
 
 export async function syncCalendars(env) {
