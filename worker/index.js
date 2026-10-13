@@ -66,7 +66,7 @@ export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(request.url);
-    if (["/google/callback", "/google/connect", "/google/status"].includes(url.pathname)) {
+    if (["/google/callback", "/google/connect", "/google/status", "/google/sync"].includes(url.pathname)) {
       try {
         const user = url.pathname === "/google/callback" ? null : await currentUser(request, env);
         return await handleCalendarRequest(request, env, user);
