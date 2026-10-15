@@ -9,6 +9,7 @@ const cors = {
 };
 
 const json = (body, status = 200) => Response.json(body, { status, headers: cors });
+const notificationPayload = (payload, job) => job.kind === "chat" ? JSON.stringify({ title: "Новое сообщение", body: job.title, url: "./?view=chat" }) : payload;
 
 async function currentUser(request, env) {
   const authorization = request.headers.get("Authorization") || "";
@@ -56,7 +57,7 @@ async function deliverQueue(env) {
     const subscriptionsResponse = await adminDb(env, `push_subscriptions?select=subscription${filter?'&'+filter:''}`);
     const subscriptions = subscriptionsResponse.ok ? await subscriptionsResponse.json() : [];
     const payload = JSON.stringify({ title: job.kind === "test" ? "Проверка уведомлений" : job.kind === "deadline_soon" ? "Осталась 1 минута до дедлайна" : job.kind === "deadline_due" ? "Срок истёк" : job.kind === "deadline" ? "Напоминание о дедлайне" : "Новое общее событие", body: job.kind === "test" ? "Уведомления работают" : job.title, url: "/vmeste-planner/" });
-    const results = await Promise.allSettled(subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, payload)));
+    const results = await Promise.allSettled(subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, notificationPayload(payload, job))));
     await adminDb(env, `push_jobs?id=eq.${job.id}`, { method: "PATCH", body: JSON.stringify({ processed_at: new Date().toISOString() }) });
     console.log(JSON.stringify({ event: "queued-push", job: job.id, subscriptions: subscriptions.length, sent: results.filter(r => r.status === "fulfilled").length, failed: results.filter(r => r.status === "rejected").map(r => String(r.reason?.message || r.reason)) }));
   }
