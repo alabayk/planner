@@ -6,7 +6,7 @@ const ownerOf = user => (user?.email || "").split("@")[0];
 const ordinary = row => row.notes !== "__todo__" && !(row.notes || "").startsWith("[[deadline]]");
 const shared = row => row.space === "shared" && (row.notes || "").includes(BOTH);
 const wanted = (row, owner) => row.created_by === owner || shared(row);
-const cleanNotes = value => (value || "").replace(BOTH, "").trim();
+const cleanNotes = value => (value || "").replace(BOTH, "").replace(/\n?\[\[series:[^\]]+\]\]/g, "").trim();
 
 async function hash(row) {
   const value = JSON.stringify([row.title, row.notes || "", row.starts_at, row.duration_minutes, row.deleted]);

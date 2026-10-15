@@ -11,7 +11,7 @@
   <link rel="icon" href="./icon.svg?v=11">
   <link rel="apple-touch-icon" href="./icon.svg?v=11">
   <link rel="stylesheet" href="./styles.css?v=11">
-  <link rel="stylesheet" href="./enhancements.css?v=38">
+  <link rel="stylesheet" href="./enhancements.css?v=39">
   <title>Планер</title>
 </head>
 <body>
@@ -46,6 +46,7 @@
       <input type="hidden" id="eventId">
       <label class="titleLabel">Что планируем?<input id="title" maxlength="120" required autocomplete="off" placeholder="Например, прогулка"></label>
       <div class="row eventTimes"><label>Начало<input id="startsAt" type="datetime-local" required></label><label>Конец<input id="endsAt" type="datetime-local" required></label></div>
+      <div class="repeatFields"><label>Повтор<select id="repeatRule"><option value="none">Не повторять</option><option value="daily">Каждый день</option><option value="weekdays">По будням</option><option value="weekly">Каждую неделю</option><option value="biweekly">Раз в две недели</option><option value="monthly">Каждый месяц</option></select></label><label id="repeatUntilField" hidden>Повторять до<input id="repeatUntil" type="date"></label></div>
       <label class="calendarField">Видимость<select id="space"></select><small>«Все» — событие видно вам обоим</small></label>
       <label>Заметка о событии <span class="optional">необязательно</span><textarea id="notes" maxlength="600" placeholder="Адрес, детали или идея…"></textarea></label>
       <div class="actions secondaryActions"><button id="copy" type="button" hidden>Копировать</button><button id="delete" type="button" hidden>Удалить</button></div>
@@ -79,6 +80,6 @@
 
   <template id="card"><article><button class="check" aria-label="Готово"></button><div class="cardBody"><time></time><h3></h3><p></p></div><button class="more" aria-label="Действия">•••</button></article></template>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script type="module" src="./app.js?v=54"></script>
+  <script type="module" src="./app.js?v=55"></script>
 </body>
 </html>
