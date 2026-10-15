@@ -118,7 +118,24 @@ async function syncOwner(env, tokenRow) {
     if (saved && !event) { await conflict(env, row.id, owner, "Связанное событие Google не найдено"); continue; }
     const plannerChanged = saved && await hash(row) !== saved.planner_signature;
     const googleChanged = saved && event && event.etag !== saved.google_etag;
-    if (plannerChanged && googleChanged) { await conflict(env, row.id, owner, "Обе стороны изменены"); continue; }
+    if (plannerChanged && googleChanged) {
+      const plannerTime = new Date(row.updated_at || 0).getTime(), googleTime = new Date(event.updated || 0).getTime();
+      if (event.status === "cancelled" || googleTime > plannerTime) {
+        const patch = event.status === "cancelled" ? { deleted: true } : plannerFields(event);
+        if (!patch.deleted) patch.notes = patch.notes + (shared(row) ? BOTH : "");
+        patch.version = Number(row.version) + 1; patch.updated_at = new Date().toISOString();
+        const updated = await admin(env, `planner_events?id=eq.${row.id}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(patch) });
+        await saveLink(env, updated[0], owner, event);
+      } else if (row.deleted) {
+        await google(eventUrl(calendar, saved.google_id), token, { method: "DELETE" });
+        await saveLink(env, row, owner, { id: saved.google_id });
+      } else {
+        const updated = await google(eventUrl(calendar, saved.google_id), token, { method: "PATCH", body: JSON.stringify(googleBody(row)) });
+        await saveLink(env, row, owner, updated);
+      }
+      await conflict(env, row.id, owner, plannerTime >= googleTime ? "Конфликт автоматически разрешён в пользу Планера" : "Конфликт автоматически разрешён в пользу Google");
+      writes++; continue;
+    }
     if (googleChanged) {
       const patch = event.status === "cancelled" ? { deleted: true } : plannerFields(event);
       if (!patch.deleted) patch.notes = patch.notes + (shared(row) ? BOTH : "");
