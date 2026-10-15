@@ -4,12 +4,23 @@ import { handleCalendarRequest, syncCalendars } from "./calendar.js";
 const allowedOrigin = "*";
 const cors = {
   "Access-Control-Allow-Origin": allowedOrigin,
-  "Access-Control-Allow-Headers": "authorization, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info, accept-profile, content-profile, prefer, range",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
 };
 
 const json = (body, status = 200) => Response.json(body, { status, headers: cors });
 const notificationPayload = (payload, job) => job.kind === "chat" ? JSON.stringify({ title: "Новое сообщение", body: job.title, url: "./?view=chat" }) : payload;
+
+async function proxySupabase(request, env, url) {
+  const target = new URL(env.SUPABASE_URL + url.pathname.slice(3) + url.search);
+  const headers = new Headers(request.headers);
+  headers.set("apikey", env.SUPABASE_PUBLISHABLE_KEY);
+  headers.delete("host");
+  const response = await fetch(new Request(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? null : request.body, redirect: "manual" }));
+  const responseHeaders = new Headers(response.headers);
+  Object.entries(cors).forEach(([key, value]) => responseHeaders.set(key, value));
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders });
+}
 
 async function currentUser(request, env) {
   const authorization = request.headers.get("Authorization") || "";
@@ -67,6 +78,7 @@ export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/sb/")) return proxySupabase(request, env, url);
     if (["/google/callback", "/google/connect", "/google/status", "/google/sync"].includes(url.pathname)) {
       try {
         const user = url.pathname === "/google/callback" ? null : await currentUser(request, env);
