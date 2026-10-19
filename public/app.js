@@ -1,3 +1,4 @@
+import {installQuickEvent} from './quick-event.mjs';
 import {installCollaboration} from './collaboration.mjs';
 import {isInviteRow} from './invite-model.mjs';
 import {apiJson,safeSupabaseFetch,publicError} from './api.mjs';
@@ -233,6 +234,7 @@ const collaboration=installCollaboration({state,client,url:CALENDAR_SYNC_URL,ren
 const renderCalendar=render;
 render=()=>{if(state.invites)collaboration.render();else{$('#dateTitle').disabled=false;renderCalendar();}collaboration.badge();};
 const eventEditor=installEventEditor({state,saveSeries,closeEditor,ensureNotifications,linkedCopies});
+installQuickEvent({openEditor});
 state.chat=new URLSearchParams(location.search).get('view')==='chat';if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js');setInterval(updateCurrentTimeLine,30000);boot();
 setInterval(()=>{if(state.user&&!document.hidden)refreshCalendarStatus().catch(()=>{})},120000);
 window.addEventListener('online',()=>{if(state.user)refreshCalendarStatus().catch(()=>{})});
