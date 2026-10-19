@@ -1,3 +1,4 @@
+import {googleBody,plannerFields} from './google-event-model.mjs';
 import {CALENDAR_FIELDS,calendarSnapshot,readSignature,recordConflict,compareAndSet,stableImportedRow,mergeCalendar,reconnectNeeded} from './calendar-safety.mjs';
 const GOOGLE = "https://www.googleapis.com/calendar/v3";
 const BOTH = "\n[[planner:both]]";
@@ -47,19 +48,6 @@ async function accessToken(env, token) {
 }
 
 const eventUrl = (calendar, id = "") => `${GOOGLE}/calendars/${encodeURIComponent(calendar)}/events${id ? "/" + encodeURIComponent(id) : ""}`;
-function googleBody(row) {
-  const start = new Date(row.starts_at), end = new Date(start.getTime() + Number(row.duration_minutes) * 60000);
-  return { summary: row.title, description: cleanNotes(row.notes), start: { dateTime: start.toISOString() },
-    end: { dateTime: end.toISOString() }, extendedProperties: { private: { plannerId: row.id } } };
-}
-function plannerFields(event) {
-  if (event.recurrence || !event.start?.dateTime || !event.end?.dateTime) throw new Error("Повтор или весь день требует ручной проверки");
-  const start = new Date(event.start.dateTime), end = new Date(event.end.dateTime), minutes = Math.round((end - start) / 60000);
-  if (minutes < 5 || minutes > 1440) throw new Error("Некорректная длительность");
-  const title = event.summary || "Без названия", notes = event.description || "";
-  if (title.length > 120 || notes.length > 580) throw new Error("Слишком длинный текст");
-  return { title, notes, starts_at: start.toISOString(), duration_minutes: minutes };
-}
 
 async function listEvents(token, calendar) {
   const events = new Map(); let pageToken = "";
@@ -67,7 +55,15 @@ async function listEvents(token, calendar) {
     const query = new URLSearchParams({ maxResults: "2500", showDeleted: "true" });
     if (pageToken) query.set("pageToken", pageToken);
     const page = await google(`${eventUrl(calendar)}?${query}`, token);
-    for (const event of page.items || []) events.set(event.id, event);
+    for(const event of page.items||[]){
+      if(!event.recurrence||event.status==='cancelled'){events.set(event.id,event);continue;}
+      let instancePage='';const from=new Date();from.setDate(from.getDate()-31);const to=new Date();to.setFullYear(to.getFullYear()+1);
+      do{
+        const params=new URLSearchParams({maxResults:'2500',showDeleted:'true',timeMin:from.toISOString(),timeMax:to.toISOString()});if(instancePage)params.set('pageToken',instancePage);
+        const instances=await google(`${eventUrl(calendar,event.id)}/instances?${params}`,token);
+        for(const instance of instances.items||[])events.set(instance.id,instance);instancePage=instances.nextPageToken||'';
+      }while(instancePage);
+    }
     pageToken = page.nextPageToken || "";
   } while (pageToken);
   return events;
@@ -76,7 +72,7 @@ async function listEvents(token, calendar) {
 async function saveLink(env, row, owner, event) {
   await admin(env, "planner_google_links?on_conflict=planner_id,owner", { method: "POST",
     headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ planner_id: row.id, owner,
-      google_id: event.id, planner_signature: JSON.stringify({format:2,hash:await hash(row),base:calendarSnapshot(row)}), google_etag: event.etag || null }) });
+      google_id: event.id, planner_signature: JSON.stringify({format:2,hash:await hash(row),base:calendarSnapshot(row),recurring:!!event.recurringEventId}), google_etag: event.etag || null }) });
 }
 async function conflict(env, plannerId, owner, reason) {
   await admin(env, "planner_google_conflicts", { method: "POST", body: JSON.stringify({ planner_id: plannerId, owner, reason }) });
@@ -107,7 +103,12 @@ async function syncOwner(env, tokenRow) {
   for(const row of rows){
     if(writes>=MAX_WRITES)break;
     if(!ordinary(row))continue;
-    const saved=byPlanner.get(row.id),shouldExist=wanted(row,owner),event=saved&&remote.get(saved.google_id);
+    const saved=byPlanner.get(row.id),shouldExist=wanted(row,owner);let event=saved&&remote.get(saved.google_id);
+    if(saved&&!event){
+      const previous=readSignature(saved.planner_signature);
+      if(previous.recurring&&await hash(row)===previous.hash)continue;
+      try{event=await google(eventUrl(calendar,saved.google_id),token);}catch(error){await conflict(env,row.id,owner,String(error.message||error));continue;}
+    }
     if(saved&&!shouldExist&&!row.deleted){
       if(event&&event.status!=='cancelled')await google(eventUrl(calendar,saved.google_id),token,{method:'DELETE',headers:{'If-Match':event.etag}});
       await admin(env,`planner_google_links?planner_id=eq.${row.id}&owner=eq.${encodeURIComponent(owner)}`,{method:'DELETE'});writes++;continue;
@@ -119,8 +120,7 @@ async function syncOwner(env, tokenRow) {
     const googleChanged=saved&&event.etag!==saved.google_etag;
     if(saved&&event.status==='cancelled'&&row.deleted){await saveLink(env,row,owner,event);continue;}
     if(plannerChanged&&googleChanged){
-      const remoteRow=event.status==='cancelled'?{...row,deleted:true}:{...row,...plannerFields(event),deleted:false};
-      if(!remoteRow.deleted)remoteRow.notes=remoteRow.notes+(shared(row)?BOTH:'');
+      const remoteRow=event.status==='cancelled'?{...row,deleted:true}:{...row,...plannerFields(event,row),deleted:false};
       const result=signature.base?mergeCalendar(signature.base,row,remoteRow):{conflicts:['unknownBase']};
       if(result.conflicts.length){await recordConflict(admin,env,row,owner,remoteRow,event.etag,signature.base);continue;}
       const updatedRow=await compareAndSet(admin,env,row,result.merged);if(!updatedRow)continue;
@@ -130,8 +130,7 @@ async function syncOwner(env, tokenRow) {
       await saveLink(env,updatedRow,owner,updatedEvent);writes++;continue;
     }
     if(googleChanged){
-      const patch=event.status==='cancelled'?{deleted:true}:plannerFields(event);
-      if(!patch.deleted)patch.notes=patch.notes+(shared(row)?BOTH:'');
+      const patch=event.status==='cancelled'?{deleted:true}:plannerFields(event,row);
       const updated=await compareAndSet(admin,env,row,patch);if(!updated)continue;
       await saveLink(env,updated,owner,event);writes++;continue;
     }
@@ -218,7 +217,7 @@ export async function handleCalendarRequest(request, env, user) {
       seen.add(entry.planner_id);
       conflicts.push({id:entry.id,title:payload.local.title,local:payload.local,remote:payload.remote});
     }catch{}
-    return Response.json({syncRevision:64,connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
+    return Response.json({syncRevision:65,connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
   }
   if(url.pathname==='/google/resolve'&&request.method==='POST'){
     const headers={'Access-Control-Allow-Origin':'*'};
