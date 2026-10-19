@@ -1,3 +1,4 @@
+import {apiJson} from './api.mjs';
 let running=null;
 export async function refreshCalendarConnection({client,url,sync}){
   if(running)return running;
@@ -10,9 +11,7 @@ async function check({client,url,sync}){
   if(!warning){warning=document.createElement('section');warning.id='calendarWarning';warning.className='calendarWarning';document.getElementById('offline').after(warning);}
   try{
     const headers={Authorization:`Bearer ${session.access_token}`};
-    const response=await fetch(url+'/google/status',{headers,signal:AbortSignal.timeout(15000)});
-    if(!response.ok)throw new Error('Не удалось проверить Google Calendar');
-    const result=await response.json();button.disabled=!!result.connected&&!result.requiresReconnect;
+    const result=await apiJson(url+'/google/status',{headers,timeout:15000});button.disabled=!!result.connected&&!result.requiresReconnect;
     button.classList.toggle('connected',button.disabled);
     label.textContent=result.requiresReconnect?'Переподключить Google Calendar':result.connected?'Google Calendar подключён':'Подключить Google Calendar';
     button.querySelector('i').textContent=button.disabled?'✓':'→';
@@ -31,8 +30,7 @@ async function check({client,url,sync}){
         const pick=document.createElement('button');pick.textContent=title;
         pick.onclick=async()=>{pick.disabled=true;try{
           const {data:{session:current}}=await client.auth.getSession();
-          const answer=await fetch(url+'/google/resolve',{method:'POST',headers:{Authorization:`Bearer ${current.access_token}`,'Content-Type':'application/json'},body:JSON.stringify({id:conflict.id,choice})});
-          if(!answer.ok)throw new Error('Не удалось применить выбор. Обновите список: событие могло измениться.');
+          await apiJson(url+'/google/resolve',{method:'POST',headers:{Authorization:`Bearer ${current.access_token}`,'Content-Type':'application/json'},body:JSON.stringify({id:conflict.id,choice})});
           await refreshCalendarConnection({client,url,sync});await sync();
         }catch(error){compare.textContent=error.message;}finally{pick.disabled=false;}};box.append(pick);
       }

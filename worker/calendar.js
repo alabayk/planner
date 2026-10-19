@@ -5,7 +5,7 @@ const BOTH = "\n[[planner:both]]";
 const MAX_WRITES = 10;
 
 const ownerOf = user => (user?.email || "").split("@")[0];
-const ordinary = row => row.notes !== "__todo__" && !(row.notes || "").startsWith("[[deadline]]");
+const ordinary = row => !(row.notes || "").startsWith("[[invitation]]") && row.notes !== "__todo__" && !(row.notes || "").startsWith("[[deadline]]");
 const shared = row => row.space === "shared" && (row.notes || "").includes(BOTH);
 const wanted = (row, owner) => row.created_by === owner || shared(row);
 const cleanNotes = value => (value || "").replace(BOTH, "").replace(/\n?\[\[series:[^\]]+\]\]/g, "").trim();
@@ -217,7 +217,7 @@ export async function handleCalendarRequest(request, env, user) {
       seen.add(entry.planner_id);
       conflicts.push({id:entry.id,title:payload.local.title,local:payload.local,remote:payload.remote});
     }catch{}
-    return Response.json({syncRevision:65,connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
+    return Response.json({syncRevision:66,connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
   }
   if(url.pathname==='/google/resolve'&&request.method==='POST'){
     const headers={'Access-Control-Allow-Origin':'*'};

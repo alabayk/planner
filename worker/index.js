@@ -1,4 +1,6 @@
 import webpush from "web-push";
+import {handleInvitations,processInvitations} from "./invitations.mjs";
+import {safeError,checkedJson,unavailable} from "./api-errors.mjs";
 import { handleCalendarRequest, syncCalendars } from "./calendar.js";
 
 const allowedOrigin = "*";
@@ -9,14 +11,17 @@ const cors = {
 };
 
 const json = (body, status = 200) => Response.json(body, { status, headers: cors });
-const notificationPayload = (payload, job) => job.kind === "chat" ? JSON.stringify({ title: "Новое сообщение", body: job.title, url: "./?view=chat" }) : payload;
+const notificationPayload = (payload, job) => job.kind === "chat" ? JSON.stringify({ title: "Новое сообщение", body: job.title, url: "./?view=chat" }) : job.kind === "invite" ? JSON.stringify({title:"Приглашение",body:job.title,url:"./?view=invites&event="+job.event_id,tag:"invite-"+job.event_id}) : payload;
 
 async function proxySupabase(request, env, url) {
   const target = new URL(env.SUPABASE_URL + url.pathname.slice(3) + url.search);
   const headers = new Headers(request.headers);
   headers.set("apikey", env.SUPABASE_PUBLISHABLE_KEY);
   headers.delete("host");
-  const response = await fetch(new Request(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? null : request.body, redirect: "manual" }));
+  let response;
+  try { response = await fetch(new Request(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? null : request.body, redirect: "manual" }));
+    if (/text\/html/i.test(response.headers.get("content-type")||"") || /^\s*</.test(await response.clone().text())) return json({message:unavailable,error:unavailable},503);
+  } catch { return json({message:unavailable,error:unavailable},503); }
   const responseHeaders = new Headers(response.headers);
   Object.entries(cors).forEach(([key, value]) => responseHeaders.set(key, value));
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders });
@@ -28,7 +33,7 @@ async function currentUser(request, env) {
   const response = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { authorization, apikey: env.SUPABASE_PUBLISHABLE_KEY },
   });
-  return response.ok ? response.json() : null;
+  return response.ok ? checkedJson(response) : null;
 }
 
 async function db(request, env, path, init = {}) {
@@ -58,7 +63,7 @@ async function adminDb(env, path, init = {}) {
 
 async function deliverQueue(env) {
   if (!env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing");
-  const jobsResponse = await adminDb(env, `push_jobs?select=id,created_by,target_user_id,title,audience,kind&processed_at=is.null&deliver_at=lte.${encodeURIComponent(new Date().toISOString())}&order=deliver_at.asc&limit=20`);
+  const jobsResponse = await adminDb(env, `push_jobs?select=id,event_id,created_by,target_user_id,title,audience,kind&processed_at=is.null&deliver_at=lte.${encodeURIComponent(new Date().toISOString())}&order=deliver_at.asc&limit=20`);
   if (!jobsResponse.ok) throw new Error(await jobsResponse.text());
   const jobs = await jobsResponse.json();
   webpush.setVapidDetails("mailto:noreply@planer.app", env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
@@ -79,15 +84,19 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(request.url);
     if (url.pathname.startsWith("/sb/")) return proxySupabase(request, env, url);
+    if (url.pathname.startsWith("/invites/")) {
+      try {return await handleInvitations(request,env,await currentUser(request,env));}
+      catch(error){return json({error:safeError(error)},503);}
+    }
     if (["/google/callback", "/google/connect", "/google/status", "/google/sync", "/google/resolve"].includes(url.pathname)) {
       try {
         const user = url.pathname === "/google/callback" ? null : await currentUser(request, env);
         return await handleCalendarRequest(request, env, user);
       } catch (error) {
-        return json({ error: String(error?.message || error) }, 500);
+        return json({ error: safeError(error) }, 500);
       }
     }
-    if (request.method === "GET") return json({ ok: true, syncRevision: 65, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
+    if (request.method === "GET") return json({ ok: true, syncRevision: 66, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
     try {
       const user = await currentUser(request, env);
@@ -130,10 +139,10 @@ export default {
 
       return json({ error: "Bad request" }, 400);
     } catch (error) {
-      return json({ error: String(error?.message || error) }, 500);
+      return json({ error: safeError(error) }, 500);
     }
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(Promise.all([deliverQueue(env), syncCalendars(env)]));
+    ctx.waitUntil(Promise.all([processInvitations(env).catch(error=>console.error(safeError(error))).then(()=>deliverQueue(env)), syncCalendars(env)]));
   },
 };
