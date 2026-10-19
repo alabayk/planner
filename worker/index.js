@@ -79,7 +79,7 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(request.url);
     if (url.pathname.startsWith("/sb/")) return proxySupabase(request, env, url);
-    if (["/google/callback", "/google/connect", "/google/status", "/google/sync"].includes(url.pathname)) {
+    if (["/google/callback", "/google/connect", "/google/status", "/google/sync", "/google/resolve"].includes(url.pathname)) {
       try {
         const user = url.pathname === "/google/callback" ? null : await currentUser(request, env);
         return await handleCalendarRequest(request, env, user);
@@ -87,7 +87,7 @@ export default {
         return json({ error: String(error?.message || error) }, 500);
       }
     }
-    if (request.method === "GET") return json({ ok: true, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
+    if (request.method === "GET") return json({ ok: true, syncRevision: 64, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
     try {
       const user = await currentUser(request, env);

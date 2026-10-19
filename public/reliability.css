@@ -1,0 +1,7 @@
+.syncIssues,.calendarWarning{margin:10px 0;padding:12px 14px;border:1px solid #d89c43;border-radius:14px;background:#fff7e8;color:#513b1d;font-size:14px;overflow-wrap:anywhere}
+.syncIssues[hidden],.calendarWarning[hidden]{display:none}
+.syncIssues p,.calendarWarning p{margin:5px 0 10px}
+.syncIssues button,.calendarWarning button{padding:9px 12px;margin:4px 6px 4px 0;border:1px solid #d8bd93;border-radius:10px;background:#fff;color:inherit;font:inherit}
+.syncIssues details{border-top:1px solid #e3cda8;padding-top:10px;margin-top:10px}
+.syncIssues summary{cursor:pointer;font-weight:600}
+.syncIssues details p{white-space:pre-wrap}

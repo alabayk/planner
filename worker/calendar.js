@@ -1,3 +1,4 @@
+import {CALENDAR_FIELDS,calendarSnapshot,readSignature,recordConflict,compareAndSet,stableImportedRow,mergeCalendar,reconnectNeeded} from './calendar-safety.mjs';
 const GOOGLE = "https://www.googleapis.com/calendar/v3";
 const BOTH = "\n[[planner:both]]";
 const MAX_WRITES = 10;
@@ -75,103 +76,95 @@ async function listEvents(token, calendar) {
 async function saveLink(env, row, owner, event) {
   await admin(env, "planner_google_links?on_conflict=planner_id,owner", { method: "POST",
     headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ planner_id: row.id, owner,
-      google_id: event.id, planner_signature: await hash(row), google_etag: event.etag || null }) });
+      google_id: event.id, planner_signature: JSON.stringify({format:2,hash:await hash(row),base:calendarSnapshot(row)}), google_etag: event.etag || null }) });
 }
 async function conflict(env, plannerId, owner, reason) {
   await admin(env, "planner_google_conflicts", { method: "POST", body: JSON.stringify({ planner_id: plannerId, owner, reason }) });
 }
 
 async function syncOwner(env, tokenRow) {
-  const owner = tokenRow.owner, token = await accessToken(env, tokenRow), calendar = tokenRow.calendar_id;
-  if (!calendar) return;
-  const [rows, links] = await Promise.all([
-    admin(env, "planner_events?select=*&order=id"),
-    admin(env, `planner_google_links?select=*&owner=eq.${encodeURIComponent(owner)}`),
-  ]);
-  const remote = await listEvents(token, calendar), byId = new Map(rows.map(x => [x.id, x]));
-  const byPlanner = new Map(links.map(x => [x.planner_id, x])), linkedGoogle = new Set(links.map(x => x.google_id));
-  let writes = 0;
-  for (const [id, event] of remote) {
-    if (writes >= MAX_WRITES) break;
-    if (linkedGoogle.has(id) || event.status === "cancelled") continue;
-    const known = event.extendedProperties?.private?.plannerId, row = byId.get(known);
-    if (row && wanted(row, owner)) { await saveLink(env, row, owner, event); writes++; continue; }
-    try {
-      const fields = plannerFields(event), id = crypto.randomUUID();
-      const inserted = await admin(env, "planner_events", { method: "POST", headers: { Prefer: "return=representation" },
-        body: JSON.stringify({ id, ...fields, notes: fields.notes, space: "shared", created_by: owner,
-          done: false, deleted: false, version: 1, updated_at: new Date().toISOString() }) });
-      await saveLink(env, inserted[0], owner, event); writes++;
-    } catch (error) { await conflict(env, id, owner, String(error.message || error)); }
-  }
-  for (const row of rows) {
-  if (writes >= MAX_WRITES) break;
-  if (!ordinary(row)) continue;
-    const saved = byPlanner.get(row.id), shouldExist = wanted(row, owner), event = saved && remote.get(saved.google_id);
-    if (saved && !shouldExist && !row.deleted) {
-      if (event && event.status !== "cancelled") await google(eventUrl(calendar, saved.google_id), token, { method: "DELETE" });
-      await admin(env, `planner_google_links?planner_id=eq.${row.id}&owner=eq.${encodeURIComponent(owner)}`, { method: "DELETE" });
-      writes++; continue;
-    }
-    if (!shouldExist && !saved) continue;
-    if (!saved && row.deleted) continue;
-    if (saved && !event) { await conflict(env, row.id, owner, "Связанное событие Google не найдено"); continue; }
-    const plannerChanged = saved && await hash(row) !== saved.planner_signature;
-    const googleChanged = saved && event && event.etag !== saved.google_etag;
-    if (plannerChanged && googleChanged) {
-      const plannerTime = new Date(row.updated_at || 0).getTime(), googleTime = new Date(event.updated || 0).getTime();
-      if (event.status === "cancelled" || googleTime > plannerTime) {
-        const patch = event.status === "cancelled" ? { deleted: true } : plannerFields(event);
-        if (!patch.deleted) patch.notes = patch.notes + (shared(row) ? BOTH : "");
-        patch.version = Number(row.version) + 1; patch.updated_at = new Date().toISOString();
-        const updated = await admin(env, `planner_events?id=eq.${row.id}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(patch) });
-        await saveLink(env, updated[0], owner, event);
-      } else if (row.deleted) {
-        await google(eventUrl(calendar, saved.google_id), token, { method: "DELETE" });
-        await saveLink(env, row, owner, { id: saved.google_id });
-      } else {
-        const updated = await google(eventUrl(calendar, saved.google_id), token, { method: "PATCH", body: JSON.stringify(googleBody(row)) });
-        await saveLink(env, row, owner, updated);
+  const owner=tokenRow.owner,token=await accessToken(env,tokenRow),calendar=tokenRow.calendar_id;
+  if(!calendar)return;
+  const [rows,links]=await Promise.all([admin(env,'planner_events?select=*&order=id'),admin(env,`planner_google_links?select=*&owner=eq.${encodeURIComponent(owner)}`)]);
+  const remote=await listEvents(token,calendar),byId=new Map(rows.map(row=>[row.id,row])),byPlanner=new Map(links.map(link=>[link.planner_id,link])),linkedGoogle=new Set(links.map(link=>link.google_id));
+  let writes=0;
+  for(const [googleId,event]of remote){
+    if(writes>=MAX_WRITES)break;
+    if(linkedGoogle.has(googleId)||event.status==='cancelled')continue;
+    const known=byId.get(event.extendedProperties?.private?.plannerId);
+    if(known){if(wanted(known,owner)){await saveLink(env,known,owner,event);writes++;}continue;}
+    try{
+      const fields=plannerFields(event),{id,prior}=await stableImportedRow(owner,event,fields,rows.filter(candidate=>!byPlanner.has(candidate.id)));
+      let row=prior;
+      if(!row){
+        const inserted=await admin(env,'planner_events?on_conflict=id',{method:'POST',headers:{Prefer:'resolution=ignore-duplicates,return=representation'},body:JSON.stringify({id,...fields,space:'shared',created_by:owner,done:false,deleted:false,version:1,updated_at:new Date().toISOString()})});
+        row=inserted[0]||(await admin(env,`planner_events?id=eq.${id}&select=*`))[0];
       }
-      await conflict(env, row.id, owner, plannerTime >= googleTime ? "Конфликт автоматически разрешён в пользу Планера" : "Конфликт автоматически разрешён в пользу Google");
-      writes++; continue;
+      if(!row)throw new Error('Import was not saved');
+      await saveLink(env,row,owner,event);linkedGoogle.add(googleId);byPlanner.set(row.id,{planner_id:row.id,google_id:googleId,planner_signature:JSON.stringify({format:2,hash:await hash(row),base:calendarSnapshot(row)}),google_etag:event.etag});writes++;
+    }catch(error){await conflict(env,googleId,owner,String(error.message||error));}
+  }
+  for(const row of rows){
+    if(writes>=MAX_WRITES)break;
+    if(!ordinary(row))continue;
+    const saved=byPlanner.get(row.id),shouldExist=wanted(row,owner),event=saved&&remote.get(saved.google_id);
+    if(saved&&!shouldExist&&!row.deleted){
+      if(event&&event.status!=='cancelled')await google(eventUrl(calendar,saved.google_id),token,{method:'DELETE',headers:{'If-Match':event.etag}});
+      await admin(env,`planner_google_links?planner_id=eq.${row.id}&owner=eq.${encodeURIComponent(owner)}`,{method:'DELETE'});writes++;continue;
     }
-    if (googleChanged) {
-      const patch = event.status === "cancelled" ? { deleted: true } : plannerFields(event);
-      if (!patch.deleted) patch.notes = patch.notes + (shared(row) ? BOTH : "");
-      patch.version = Number(row.version) + 1; patch.updated_at = new Date().toISOString();
-      const updated = await admin(env, `planner_events?id=eq.${row.id}`, { method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(patch) });
-      await saveLink(env, updated[0], owner, event); writes++; continue;
+    if(!shouldExist&&!saved||!saved&&row.deleted)continue;
+    if(saved&&!event){await conflict(env,row.id,owner,'Связанное событие Google не найдено');continue;}
+    const signature=saved&&readSignature(saved.planner_signature);
+    const plannerChanged=saved&&await hash(row)!==signature.hash;
+    const googleChanged=saved&&event.etag!==saved.google_etag;
+    if(saved&&event.status==='cancelled'&&row.deleted){await saveLink(env,row,owner,event);continue;}
+    if(plannerChanged&&googleChanged){
+      const remoteRow=event.status==='cancelled'?{...row,deleted:true}:{...row,...plannerFields(event),deleted:false};
+      if(!remoteRow.deleted)remoteRow.notes=remoteRow.notes+(shared(row)?BOTH:'');
+      const result=signature.base?mergeCalendar(signature.base,row,remoteRow):{conflicts:['unknownBase']};
+      if(result.conflicts.length){await recordConflict(admin,env,row,owner,remoteRow,event.etag,signature.base);continue;}
+      const updatedRow=await compareAndSet(admin,env,row,result.merged);if(!updatedRow)continue;
+      let updatedEvent;
+      if(updatedRow.deleted){if(event.status!=='cancelled')await google(eventUrl(calendar,saved.google_id),token,{method:'DELETE',headers:{'If-Match':event.etag}});updatedEvent={...event,status:'cancelled'};}
+      else updatedEvent=await google(eventUrl(calendar,saved.google_id),token,{method:'PATCH',headers:{'If-Match':event.etag},body:JSON.stringify(googleBody(updatedRow))});
+      await saveLink(env,updatedRow,owner,updatedEvent);writes++;continue;
     }
-    if (saved && !plannerChanged) continue;
-    if (row.deleted) {
-      if (event?.status !== "cancelled") await google(eventUrl(calendar, saved.google_id), token, { method: "DELETE" });
-      await saveLink(env, row, owner, { id: saved.google_id }); writes++;
-    } else if (saved) {
-      const updated = await google(eventUrl(calendar, saved.google_id), token, { method: "PATCH", body: JSON.stringify(googleBody(row)) });
-      await saveLink(env, row, owner, updated); writes++;
-    } else {
-      const id = `p${row.id.replaceAll("-", "").toLowerCase()}`;
+    if(googleChanged){
+      const patch=event.status==='cancelled'?{deleted:true}:plannerFields(event);
+      if(!patch.deleted)patch.notes=patch.notes+(shared(row)?BOTH:'');
+      const updated=await compareAndSet(admin,env,row,patch);if(!updated)continue;
+      await saveLink(env,updated,owner,event);writes++;continue;
+    }
+    if(saved&&!plannerChanged){if(!signature.base)await saveLink(env,row,owner,event);continue;}
+    if(row.deleted){
+      if(event.status!=='cancelled')await google(eventUrl(calendar,saved.google_id),token,{method:'DELETE',headers:{'If-Match':event.etag}});
+      await saveLink(env,row,owner,{...event,status:'cancelled'});writes++;
+    }else if(saved){
+      const updated=await google(eventUrl(calendar,saved.google_id),token,{method:'PATCH',headers:{'If-Match':event.etag},body:JSON.stringify(googleBody(row))});
+      await saveLink(env,row,owner,updated);writes++;
+    }else{
+      const id=`p${row.id.replaceAll('-','').toLowerCase()}`;
       let created;
-      try {
-        created = await google(eventUrl(calendar), token, { method: "POST", body: JSON.stringify({ id, ...googleBody(row) }) });
-      } catch (error) {
-        if (!String(error?.message || error).startsWith("Google 409:")) throw error;
-        const existing = await google(eventUrl(calendar, id), token);
-        created = existing.status === "cancelled"
-          ? await google(eventUrl(calendar), token, { method: "POST", body: JSON.stringify(googleBody(row)) })
-          : existing;
+      try{created=await google(eventUrl(calendar),token,{method:'POST',body:JSON.stringify({id,...googleBody(row)})});}
+      catch(error){
+        if(!String(error.message).startsWith('Google 409:'))throw error;
+        const existing=await google(eventUrl(calendar,id),token);
+        if(existing.status==='cancelled'){
+          const replacementId=id+'v'+Number(row.version).toString(32);
+          try{created=await google(eventUrl(calendar),token,{method:'POST',body:JSON.stringify({id:replacementId,...googleBody(row)})});}
+          catch(retryError){if(!String(retryError.message).startsWith('Google 409:'))throw retryError;created=await google(eventUrl(calendar,replacementId),token);}
+        }else created=existing;
       }
-      await saveLink(env, row, owner, created); linkedGoogle.add(created.id); writes++;
+      await saveLink(env,row,owner,created);writes++;
     }
   }
-
 }
 
 export async function syncCalendars(env) {
-  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return;
-  const tokens = await admin(env, "planner_google_tokens?select=*");
-  for (const token of tokens) await syncOwner(env, token);
+  if(!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)return;
+  const tokens=await admin(env,'planner_google_tokens?select=*');
+  // One expired account must not stop synchronization for the other accounts.
+  for(const token of tokens)try{await syncOwner(env,token);}catch(error){console.error(JSON.stringify({event:'calendar-sync-error',reconnect:reconnectNeeded(error),message:String(error.message||error)}));}
 }
 
 export async function handleCalendarRequest(request, env, user) {
@@ -209,11 +202,56 @@ export async function handleCalendarRequest(request, env, user) {
     await syncCalendars(env);
     return new Response("Календарь подключён и синхронизирован. Можно закрыть эту страницу.", { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
-  if (url.pathname === "/google/status" && request.method === "GET") {
-    if (!user?.id) return Response.json({ connected: false }, { status: 401, headers: { "Access-Control-Allow-Origin": "*" } });
-    const owner = ownerOf(user);
-    const tokens = await admin(env, `planner_google_tokens?select=calendar_id,updated_at&owner=eq.${encodeURIComponent(owner)}`);
-    return Response.json({ connected: Boolean(tokens[0]?.calendar_id), updatedAt: tokens[0]?.updated_at || null }, { headers: { "Access-Control-Allow-Origin": "*" } });
+  if(url.pathname==='/google/status'&&request.method==='GET'){
+    if(!user?.id)return Response.json({connected:false},{status:401,headers:{'Access-Control-Allow-Origin':'*'}});
+    const owner=ownerOf(user),tokens=await admin(env,`planner_google_tokens?select=*&owner=eq.${encodeURIComponent(owner)}`),row=tokens[0];
+    let requiresReconnect=false,checkError=false;
+    if(row?.calendar_id)try{
+      const token=await accessToken(env,row);
+      await google(`${GOOGLE}/calendars/${encodeURIComponent(row.calendar_id)}`,token);
+    }catch(error){requiresReconnect=reconnectNeeded(error);checkError=!requiresReconnect;}
+    const pending=await admin(env,`planner_google_conflicts?select=id,planner_id,reason&owner=eq.${encodeURIComponent(owner)}&resolved_at=is.null&order=id.desc&limit=100`);
+    const seen=new Set(),conflicts=[];
+    for(const entry of pending)try{
+      const payload=JSON.parse(entry.reason);
+      if(payload.type!=='sync_conflict'||seen.has(entry.planner_id))continue;
+      seen.add(entry.planner_id);
+      conflicts.push({id:entry.id,title:payload.local.title,local:payload.local,remote:payload.remote});
+    }catch{}
+    return Response.json({syncRevision:64,connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
+  }
+  if(url.pathname==='/google/resolve'&&request.method==='POST'){
+    const headers={'Access-Control-Allow-Origin':'*'};
+    if(!user?.id)return Response.json({error:'Unauthorized'},{status:401,headers});
+    const {id,choice}=await request.json();
+    if(!/^\d+$/.test(String(id))||!['planner','google'].includes(choice))return Response.json({error:'Invalid choice'},{status:400,headers});
+    const owner=ownerOf(user),entries=await admin(env,`planner_google_conflicts?select=*&id=eq.${id}&owner=eq.${encodeURIComponent(owner)}&resolved_at=is.null`);
+    if(!entries[0])return Response.json({error:'Conflict not found'},{status:404,headers});
+    const entry=entries[0],payload=JSON.parse(entry.reason);
+    if(payload.type!=='sync_conflict')return Response.json({error:'Unsupported conflict'},{status:400,headers});
+    const rows=await admin(env,`planner_events?id=eq.${entry.planner_id}&select=*`),row=rows[0];
+    const links=await admin(env,`planner_google_links?planner_id=eq.${entry.planner_id}&owner=eq.${encodeURIComponent(owner)}&select=*`);
+    const tokenRows=await admin(env,`planner_google_tokens?owner=eq.${encodeURIComponent(owner)}&select=*`);
+    if(!row||!links[0]||!tokenRows[0])return Response.json({error:'Event unavailable'},{status:409,headers});
+    const token=await accessToken(env,tokenRows[0]),calendar=tokenRows[0].calendar_id,event=await google(eventUrl(calendar,links[0].google_id),token);
+    if(row.version!==payload.version||event.etag!==payload.etag)return Response.json({error:'Event changed; refresh conflicts'},{status:409,headers});
+    const merged=payload.base?mergeCalendar(payload.base,row,payload.remote):{merged:calendarSnapshot(row),conflicts:CALENDAR_FIELDS};
+    let patch={...merged.merged};
+    if(merged.conflicts.includes('deleted'))patch=choice==='planner'?payload.local:payload.remote;
+    else for(const key of merged.conflicts)patch[key]=(choice==='planner'?payload.local:payload.remote)[key];
+    const updated=await compareAndSet(admin,env,row,patch);
+    if(!updated)return Response.json({error:'Event changed; retry'},{status:409,headers});
+    let savedEvent=event;
+    if(updated.deleted){if(event.status!=='cancelled')await google(eventUrl(calendar,event.id),token,{method:'DELETE',headers:{'If-Match':event.etag}});savedEvent={...event,status:'cancelled'};}
+    else if(choice==='planner'||merged.conflicts.length<CALENDAR_FIELDS.length){
+      if(event.status==='cancelled'){
+        const restoredId='p'+row.id.replaceAll('-','')+'v'+Number(updated.version).toString(32);
+        savedEvent=await google(eventUrl(calendar),token,{method:'POST',body:JSON.stringify({id:restoredId,...googleBody(updated)})});
+      }else savedEvent=await google(eventUrl(calendar,event.id),token,{method:'PATCH',headers:{'If-Match':event.etag},body:JSON.stringify(googleBody(updated))});
+    }
+    await saveLink(env,updated,owner,savedEvent);
+    await admin(env,`planner_google_conflicts?planner_id=eq.${row.id}&owner=eq.${encodeURIComponent(owner)}&resolved_at=is.null`,{method:'PATCH',body:JSON.stringify({resolved_at:new Date().toISOString()})});
+    return Response.json({ok:true},{headers});
   }
   if (url.pathname === "/google/sync" && request.method === "POST") {
     if (!user?.id) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Access-Control-Allow-Origin": "*" } });
