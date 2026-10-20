@@ -6,7 +6,9 @@ import { handleCalendarRequest, syncCalendars } from "./calendar.js";
 const allowedOrigin = "*";
 const cors = {
   "Access-Control-Allow-Origin": allowedOrigin,
-  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info, accept-profile, content-profile, prefer, range",
+  "Access-Control-Allow-Headers": "authorization, apikey, content-type, x-client-info, accept-profile, content-profile, prefer, range, x-supabase-api-version",
+  "Access-Control-Expose-Headers": "content-range, range-unit, x-total-count",
+  "Cache-Control": "no-store",
   "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
 };
 
@@ -19,7 +21,7 @@ async function proxySupabase(request, env, url) {
   headers.set("apikey", env.SUPABASE_PUBLISHABLE_KEY);
   headers.delete("host");
   let response;
-  try { response = await fetch(new Request(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? null : request.body, redirect: "manual" }));
+  try { response = await fetch(new Request(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? null : request.body, signal:AbortSignal.timeout(12000), redirect: "manual" }));
     if (/text\/html/i.test(response.headers.get("content-type")||"") || /^\s*</.test(await response.clone().text())) return json({message:unavailable,error:unavailable},503);
   } catch { return json({message:unavailable,error:unavailable},503); }
   const responseHeaders = new Headers(response.headers);
@@ -32,6 +34,7 @@ async function currentUser(request, env) {
   if (!authorization.startsWith("Bearer ")) return null;
   const response = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { authorization, apikey: env.SUPABASE_PUBLISHABLE_KEY },
+    signal:AbortSignal.timeout(12000),
   });
   return response.ok ? checkedJson(response) : null;
 }
@@ -96,7 +99,7 @@ export default {
         return json({ error: safeError(error) }, 500);
       }
     }
-    if (request.method === "GET") return json({ ok: true, syncRevision: 66, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
+    if (request.method === "GET") return json({ ok: true, syncRevision: 69, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
     try {
       const user = await currentUser(request, env);

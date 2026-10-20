@@ -5,7 +5,7 @@ const profiles=['vanya','ksusha'],uuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]
 const profile=user=>profiles.find(value=>user?.email===value+'@planer.app')||'';
 const fail=(message,status=409)=>{const error=new Error(message);error.status=status;throw error;};
 const response=(body,status=200)=>Response.json(body,{status,headers:{'Access-Control-Allow-Origin':'*','Cache-Control':'no-store'}});
-async function admin(env,path,init={}){return checkedJson(await fetch(env.SUPABASE_URL+'/rest/v1/'+path,{...init,headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,Authorization:'Bearer '+env.SUPABASE_SERVICE_ROLE_KEY,'Content-Type':'application/json',...init.headers}}));}
+async function admin(env,path,init={}){return checkedJson(await fetch(env.SUPABASE_URL+'/rest/v1/'+path,{...init,signal:AbortSignal.timeout(12000),headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,Authorization:'Bearer '+env.SUPABASE_SERVICE_ROLE_KEY,'Content-Type':'application/json',...init.headers}}));}
 // Internal coordination records stay hidden even in older calendar clients.
 async function recordList(env){return admin(env,`planner_events?select=*&notes=like.${encodeURIComponent(INVITE_TAG)}*&deleted=eq.true&order=updated_at.desc&limit=500`);}
 async function getEvent(env,id){if(!uuid.test(id||''))fail('Событие не найдено',404);return (await admin(env,`planner_events?id=eq.${id}&select=*`))[0];}
