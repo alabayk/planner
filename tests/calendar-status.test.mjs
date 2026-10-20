@@ -36,3 +36,8 @@ test('expired account does not stop another account syncing',async()=>{
   };
   try{await syncCalendars(env);assert.equal(checkedSecond,true);}finally{globalThis.fetch=original;console.error=oldLog;}
 });
+test('calendar cycle reads the shared event snapshot once for both accounts',async()=>{
+  const original=globalThis.fetch;let scans=0;
+  globalThis.fetch=async input=>{const url=String(input);if(url.includes('/planner_google_tokens'))return reply(['first','second'].map(owner=>({owner,calendar_id:owner,access_token:'ok',expires_at:Date.now()+600000})));if(url.includes('/planner_events')){scans++;return reply([]);}if(url.includes('/planner_google_links'))return reply([]);if(url.includes('googleapis.com/calendar'))return reply({items:[]});throw Error('Unexpected '+url);};
+  try{await syncCalendars(env);assert.equal(scans,1);}finally{globalThis.fetch=original;}
+});

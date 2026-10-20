@@ -3,21 +3,23 @@ import {eventMeta,eventEnd,timeLabel,dateKey,plusDays} from './event-model.mjs';
 const $=selector=>document.querySelector(selector),localInput=value=>{const d=new Date(value);return new Date(d-d.getTimezoneOffset()*60000).toISOString().slice(0,16);};
 const statusText=(item)=>item.working?'Ответ сохраняется…':({pending:item.incoming?'Ждёт вашего ответа':'Ждёт ответа',accepted:item.incoming?'Вы участвуете':'Участие подтверждено',declined:item.incoming?'Вы отклонили':'Приглашение отклонено',proposed:item.incoming?'Ваше предложение времени':'Предложено другое время',cancelled:'Приглашение отменено'}[item.state]||'');
 export function installCollaboration({state,client,url,render,openEditor,closeEditor,sync,flush,all,applySnapshots}){
-  let items=[],loadedFor='',running=null,lastError='',activeEvent=null;
+  let items=[],loadedFor='',running=null,lastError='',activeEvent=null,pendingCount=null,lastListAt=0,lastStatusAt=0;
   const nav=document.createElement('button');nav.dataset.view='invites';nav.innerHTML='<i>✉</i><span>Вместе</span><b id="inviteBadge" hidden></b>';document.querySelector('footer').append(nav);
   const hint=document.createElement('p');hint.id='eventParticipation';hint.className='eventParticipation';$('#copy').before(hint);
   const modal=document.createElement('dialog');modal.id='proposalDialog';modal.innerHTML='<form><h2>Предложить другое время</h2><label>Начало<input name="start" type="datetime-local" required></label><label>Конец<input name="end" type="datetime-local" required></label><p role="alert" hidden></p><div class="actions"><button type="button" class="proposalCancel">Отмена</button><button type="submit" class="primary">Предложить</button></div></form>';document.body.append(modal);
   const node=(tag,text,className)=>{const element=document.createElement(tag);if(text!==undefined)element.textContent=text;if(className)element.className=className;return element;};
   async function request(path,body){const {data:{session}}=await client.auth.getSession();if(!session)throw new Error('Нужно войти в планер заново');return apiJson(url+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+session.access_token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});}
-  function badge(){const count=items.filter(item=>item.incoming&&item.state==='pending'||!item.incoming&&item.state==='proposed').length,b=$('#inviteBadge');b.hidden=!count;b.textContent=count>9?'9+':count;}
+  function badge(){const count=pendingCount??items.filter(item=>item.incoming&&item.state==='pending'||!item.incoming&&item.state==='proposed').length,b=$('#inviteBadge');b.hidden=!count;b.textContent=count>9?'9+':count;}
   async function refresh(force=false){
-    if(!state.user)return;if(running){await running;if(!force)return;}
-    const owner=state.user;
+    if(!state.user||document.hidden&&!force)return;if(running){await running;if(!force)return;}
+    const owner=state.user,detailed=force||state.invites||$('#editor').open;
+    if(!force&&Date.now()-(detailed?lastListAt:lastStatusAt)<(detailed?60000:300000))return;
+    if(detailed)lastListAt=Date.now();else lastStatusAt=Date.now();
     if(loadedFor!==owner){loadedFor=owner;try{items=JSON.parse(localStorage.getItem('planner-invites:'+owner)||'[]');}catch{items=[];}badge();}
-    running=(async()=>{try{const result=await request('/invites/list');if(state.user!==owner)return;const changed=JSON.stringify(items)!==JSON.stringify(result.items||[])||!!lastError;items=result.items||[];await applySnapshots?.(items.map(item=>item.event));lastError='';localStorage.setItem('planner-invites:'+owner,JSON.stringify(items));badge();if(state.invites&&(changed||force))render();if(activeEvent)configureEvent(activeEvent);}catch(error){lastError=publicError(error);if(state.invites)render();}})();
+    running=(async()=>{try{const result=await request(detailed?'/invites/list':'/invites/status');if(state.user!==owner)return;if(!detailed){pendingCount=result.pending;badge();return;}pendingCount=null;const changed=JSON.stringify(items)!==JSON.stringify(result.items||[])||!!lastError;items=result.items||[];await applySnapshots?.(items.map(item=>item.event));lastError='';localStorage.setItem('planner-invites:'+owner,JSON.stringify(items));badge();if(state.invites&&(changed||force))render();if(activeEvent)configureEvent(activeEvent);}catch(error){lastError=publicError(error);if(state.invites)render();}})();
     try{await running;}finally{running=null;}
   }
-  function show(){state.invites=true;state.chat=state.tasks=state.all=state.month=false;document.querySelectorAll('footer [data-view]').forEach(button=>button.classList.toggle('active',button===nav));render();window.scrollTo({top:0,behavior:'smooth'});refresh();}
+  function show(){state.invites=true;state.chat=state.tasks=state.all=state.month=false;document.querySelectorAll('footer [data-view]').forEach(button=>button.classList.toggle('active',button===nav));render();window.scrollTo({top:0,behavior:'smooth'});refresh(true);}
   nav.onclick=show;
   async function send(event){
     await flush();if((await all('outbox')).some(job=>job.id===event.id))throw new Error('Сначала сохраните событие и разрешите конфликт, если он есть');
@@ -84,8 +86,8 @@ export function installCollaboration({state,client,url,render,openEditor,closeEd
       };results.append(pick);}
     }catch(failure){results.textContent=publicError(failure);}finally{button.disabled=false;}};box.append(section);
   }
-  setInterval(()=>{if(state.user&&!document.hidden)refresh();},30000);
-  window.addEventListener('online',()=>refresh(true));document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+  setInterval(()=>{if(state.user&&!document.hidden)refresh();},60000);
+  window.addEventListener('online',()=>refresh());document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
   if(new URLSearchParams(location.search).get('view')==='invites'){state.invites=true;document.querySelectorAll('footer [data-view]').forEach(button=>button.classList.toggle('active',button===nav));}
   return {refresh,render:renderView,badge,configureEvent};
 }

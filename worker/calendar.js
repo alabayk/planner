@@ -78,10 +78,10 @@ async function conflict(env, plannerId, owner, reason) {
   await admin(env, "planner_google_conflicts", { method: "POST", body: JSON.stringify({ planner_id: plannerId, owner, reason }) });
 }
 
-async function syncOwner(env, tokenRow) {
+async function syncOwner(env, tokenRow, rowsOnce) {
   const owner=tokenRow.owner,token=await accessToken(env,tokenRow),calendar=tokenRow.calendar_id;
   if(!calendar)return;
-  const [rows,links]=await Promise.all([admin(env,'planner_events?select=*&order=id'),admin(env,`planner_google_links?select=*&owner=eq.${encodeURIComponent(owner)}`)]);
+  const [rows,links]=await Promise.all([rowsOnce?rowsOnce():admin(env,'planner_events?select=*&order=id'),admin(env,`planner_google_links?select=*&owner=eq.${encodeURIComponent(owner)}`)]);
   const remote=await listEvents(token,calendar),byId=new Map(rows.map(row=>[row.id,row])),byPlanner=new Map(links.map(link=>[link.planner_id,link])),linkedGoogle=new Set(links.map(link=>link.google_id));
   let writes=0;
   for(const [googleId,event]of remote){
@@ -118,7 +118,7 @@ async function syncOwner(env, tokenRow) {
     const signature=saved&&readSignature(saved.planner_signature);
     const plannerChanged=saved&&await hash(row)!==signature.hash;
     const googleChanged=saved&&event.etag!==saved.google_etag;
-    if(saved&&event.status==='cancelled'&&row.deleted){await saveLink(env,row,owner,event);continue;}
+    if(saved&&event.status==='cancelled'&&row.deleted){if(!signature.base||signature.hash!==await hash(row)||saved.google_etag!==event.etag)await saveLink(env,row,owner,event);continue;}
     if(plannerChanged&&googleChanged){
       const remoteRow=event.status==='cancelled'?{...row,deleted:true}:{...row,...plannerFields(event,row),deleted:false};
       const result=signature.base?mergeCalendar(signature.base,row,remoteRow):{conflicts:['unknownBase']};
@@ -163,7 +163,8 @@ export async function syncCalendars(env) {
   if(!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)return;
   const tokens=await admin(env,'planner_google_tokens?select=*');
   // One expired account must not stop synchronization for the other accounts.
-  for(const token of tokens)try{await syncOwner(env,token);}catch(error){console.error(JSON.stringify({event:'calendar-sync-error',reconnect:reconnectNeeded(error),message:String(error.message||error)}));}
+  let rowsRequest;const rowsOnce=()=>rowsRequest||(rowsRequest=admin(env,'planner_events?select=*&order=id'));
+  for(const token of tokens)try{await syncOwner(env,token,rowsOnce);}catch(error){console.error(JSON.stringify({event:'calendar-sync-error',reconnect:reconnectNeeded(error),message:String(error.message||error)}));}
 }
 
 export async function handleCalendarRequest(request, env, user) {
@@ -217,7 +218,7 @@ export async function handleCalendarRequest(request, env, user) {
       seen.add(entry.planner_id);
       conflicts.push({id:entry.id,title:payload.local.title,local:payload.local,remote:payload.remote});
     }catch{}
-    return Response.json({syncRevision:66,connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
+    return Response.json({syncRevision:70,connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
   }
   if(url.pathname==='/google/resolve'&&request.method==='POST'){
     const headers={'Access-Control-Allow-Origin':'*'};

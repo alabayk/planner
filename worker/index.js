@@ -1,3 +1,4 @@
+import {calendarSyncDue} from "./traffic-policy.mjs";
 import webpush from "web-push";
 import {handleInvitations,processInvitations} from "./invitations.mjs";
 import {safeError,checkedJson,unavailable} from "./api-errors.mjs";
@@ -99,7 +100,7 @@ export default {
         return json({ error: safeError(error) }, 500);
       }
     }
-    if (request.method === "GET") return json({ ok: true, syncRevision: 69, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
+    if (request.method === "GET") return json({ ok: true, syncRevision: 70, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
     try {
       const user = await currentUser(request, env);
@@ -146,6 +147,6 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(Promise.all([processInvitations(env).catch(error=>console.error(safeError(error))).then(()=>deliverQueue(env)), syncCalendars(env)]));
+    ctx.waitUntil(Promise.all([processInvitations(env).catch(error=>console.error(safeError(error))).then(()=>deliverQueue(env)), calendarSyncDue(_controller.scheduledTime)?syncCalendars(env):Promise.resolve()]));
   },
 };

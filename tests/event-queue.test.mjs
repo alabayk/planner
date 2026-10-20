@@ -52,3 +52,7 @@ test('a late sync response cannot overwrite newer or still-pending local data',a
   await f.engine.applyRemote([{...event,title:'Server update',version:4}]);
   assert.equal(f.state.events[0].title,'Pending edit');
 });
+test('server inventory removes obsolete cached records but never erases pending edits',async()=>{
+  const f=fixture(event);f.stores.events.set('revoked',{...event,id:'revoked'});f.stores.events.set('pending',{...event,id:'pending',title:'Offline edit'});await f.queue({...event,id:'pending',mutationId:'p'});
+  await f.engine.applyRemote([event]);assert.equal(f.stores.events.has('revoked'),false);assert.equal(f.stores.events.get('pending').title,'Offline edit');assert.equal(f.stores.outbox.has('pending'),true);
+});

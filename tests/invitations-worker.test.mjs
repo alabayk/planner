@@ -52,3 +52,7 @@ test('stale response does not overwrite source; cron recovers interrupted accept
 test('unrecognized accounts cannot access invitations or private free-time data',async()=>{
   assert.equal((await call('list',{id:'x',email:'unknown@planer.app'})).status,401);
 });
+test('background badge reads no paired event bodies and returns no titles',async()=>{
+  const b=backend(),original=globalThis.fetch,calls=[];globalThis.fetch=async(input,init)=>{calls.push(new URL(input));return b.fetcher(input,init);};
+  try{await call('send',owner,{eventId,eventVersion:1});calls.length=0;const result=await call('status',recipient),body=await result.json();assert.deepEqual(body,{pending:1});assert.equal(calls.length,1);assert.equal(calls[0].searchParams.get('select'),'id,notes,created_by');assert.ok(calls[0].searchParams.get('or').includes('pending'));}finally{globalThis.fetch=original;}
+});

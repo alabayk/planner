@@ -7,7 +7,7 @@ const fail=(message,status=409)=>{const error=new Error(message);error.status=st
 const response=(body,status=200)=>Response.json(body,{status,headers:{'Access-Control-Allow-Origin':'*','Cache-Control':'no-store'}});
 async function admin(env,path,init={}){return checkedJson(await fetch(env.SUPABASE_URL+'/rest/v1/'+path,{...init,signal:AbortSignal.timeout(12000),headers:{apikey:env.SUPABASE_SERVICE_ROLE_KEY,Authorization:'Bearer '+env.SUPABASE_SERVICE_ROLE_KEY,'Content-Type':'application/json',...init.headers}}));}
 // Internal coordination records stay hidden even in older calendar clients.
-async function recordList(env){return admin(env,`planner_events?select=*&notes=like.${encodeURIComponent(INVITE_TAG)}*&deleted=eq.true&order=updated_at.desc&limit=500`);}
+async function recordList(env,mode='all'){const select=mode==='status'?'id,notes,created_by':'*',filter=mode==='retry'?'(notes.like.*notice*,notes.like.*sourceVersion*)':mode==='status'?'(notes.like.*pending*,notes.like.*proposed*)':'';return admin(env,`planner_events?select=${select}&notes=like.${encodeURIComponent(INVITE_TAG)}*&deleted=eq.true&order=updated_at.desc&limit=500${filter?'&or='+encodeURIComponent(filter):''}`);}
 async function getEvent(env,id){if(!uuid.test(id||''))fail('Событие не найдено',404);return (await admin(env,`planner_events?id=eq.${id}&select=*`))[0];}
 async function update(env,row,patch){return (await admin(env,`planner_events?id=eq.${row.id}&version=eq.${row.version}`,{method:'PATCH',headers:{Prefer:'return=representation'},body:JSON.stringify({...patch,version:Number(row.version)+1,updated_at:new Date().toISOString()})}))[0];}
 const object=row=>({id:row.id,title:row.title,notes:row.notes,startsAt:row.starts_at,durationMinutes:row.duration_minutes,space:row.space,createdBy:row.created_by,done:row.done,deleted:row.deleted,version:row.version,updatedAt:row.updated_at});
@@ -39,7 +39,7 @@ async function complete(env,record){
   const saved=await saveRecord(env,record,next);return saved||await getEvent(env,record.id);
 }
 export async function processInvitations(env){
-  const records=await recordList(env);
+  const records=await recordList(env,'retry');
   for(let record of records)try{
     if(readInvite(record)?.op)try{record=await complete(env,record);}catch(error){if(error.status===409||error.status===404){const data=readInvite(record);delete data.op;await saveRecord(env,record,data);}throw error;}
     await notification(env,record);
@@ -49,6 +49,11 @@ export async function handleInvitations(request,env,user){
   const actor=profile(user);if(!user?.id||!profiles.includes(actor))return response({error:'Нужно войти в планер'},401);
   const path=new URL(request.url).pathname;
   try{
+    if(path==='/invites/status'&&request.method==='GET'){
+      const records=await recordList(env,'status');let pending=0;
+      for(const record of records){const data=readInvite(record);if(data?.state==='pending'&&data.to===actor||data?.state==='proposed'&&record.created_by===actor)pending++;}
+      return response({pending});
+    }
     if(path==='/invites/list'&&request.method==='GET'){
       const records=(await recordList(env)).filter(record=>{const data=readInvite(record);return record.created_by===actor||data?.to===actor;});
       const items=[];

@@ -5,16 +5,21 @@ import {publicError,safeSupabaseFetch} from '../public/api.mjs';
 import {checkedJson,safeError} from '../worker/api-errors.mjs';
 
 test('automatic sync starts once, polls every 30s, and skips hidden/offline state',async()=>{
-  let callback,delay,created=0,cleared=0,calls=0,active=true;
+  let callback,delay,created=0,cleared=0,calls=0,active=true,clock=0;
   const timers={setInterval(fn,ms){callback=fn;delay=ms;created++;return 7;},clearInterval(id){assert.equal(id,7);cleared++;}};
-  const sync=createLiveSync({run:()=>++calls,isActive:()=>active,timers});sync.start();sync.start();assert.equal(created,1);assert.equal(delay,30000);
-  await callback();assert.equal(calls,1);active=false;await callback();assert.equal(calls,1);active=true;await sync.tick();assert.equal(calls,2);sync.stop();assert.equal(cleared,1);
+  const sync=createLiveSync({run:()=>++calls,isActive:()=>active,timers,now:()=>clock});sync.start();sync.start();assert.equal(created,1);assert.equal(delay,30000);
+  clock=30000;await callback();assert.equal(calls,1);active=false;await callback();assert.equal(calls,1);active=true;await sync.tick();assert.equal(calls,2);sync.stop();assert.equal(cleared,1);
 });
 test('overlapping sync triggers share one request and recover after failure',async()=>{
   let release,calls=0;const sync=createLiveSync({run:()=>{calls++;return new Promise(resolve=>release=resolve);}});
   const first=sync.tick(),second=sync.tick();await Promise.resolve();assert.equal(calls,1);release(true);await Promise.all([first,second]);
   const next=sync.tick();await Promise.resolve();assert.equal(calls,2);release(false);assert.equal(await next,false);
   let attempt=0;const recovering=createLiveSync({run:()=>{if(!attempt++)throw Error('offline');return true;}});assert.equal(await recovering.tick(),false);assert.equal(await recovering.tick(),true);
+});
+test('unchanged data slows background checks and errors back off, without blocking manual refresh',async()=>{
+  let callback,clock=0,calls=0,result={changed:false};const sync=createLiveSync({interval:60000,run:()=>{calls++;return result;},now:()=>clock,timers:{setInterval(fn){callback=fn;return 1;},clearInterval(){}}});sync.start();
+  clock=60000;await callback();assert.equal(calls,1);clock=120000;await callback();assert.equal(calls,1);clock=180000;await callback();assert.equal(calls,2);
+  result=false;await sync.tick();assert.equal(calls,3);clock+=60000;await callback();assert.equal(calls,3);await sync.tick();assert.equal(calls,4); // Manual recovery remains available.
 });
 test('permission errors are not mislabeled as offline or fixed with VPN',async()=>{
   const text=publicError({code:'42501',message:'permission denied for table planner_events'});assert.match(text,/repair-access.sql/);assert.match(text,/VPN/);

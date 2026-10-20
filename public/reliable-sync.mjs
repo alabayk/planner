@@ -121,7 +121,9 @@ export function createEventSync({client,state,all,put,remove,dbp,render,fromRow,
     await new Promise((resolve,reject)=>{
       const tx=database.transaction(['events','outbox'],'readwrite'),events=tx.objectStore('events'),queue=tx.objectStore('outbox');
       const storedRequest=events.getAll(),pendingRequest=queue.getAll();let stored,pending;
-      const apply=()=>{if(!stored||!pending)return;const pendingIds=new Set(pending.map(e=>e.id)),byId=new Map(stored.map(e=>[e.id,e]));
+      const apply=()=>{if(!stored||!pending)return;const pendingIds=new Set(pending.map(e=>e.id)),byId=new Map(stored.map(e=>[e.id,e])),remoteIds=new Set(remote.map(e=>e.id));
+        // Remove only obsolete local cache rows, never queued edits or server data.
+        for(const row of stored)if(!remoteIds.has(row.id)&&!pendingIds.has(row.id))events.delete(row.id);
         for(const row of remote)if(!pendingIds.has(row.id)&&Number(row.version)>=Number(byId.get(row.id)?.version||0))events.put(row);
       };
       storedRequest.onsuccess=()=>{stored=storedRequest.result;apply();};pendingRequest.onsuccess=()=>{pending=pendingRequest.result;apply();};
