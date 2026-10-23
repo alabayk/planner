@@ -6,7 +6,7 @@ function fixture(remote){
   const stores={events:new Map(),outbox:new Map()},copy=x=>structuredClone(x);
   const all=async name=>[...stores[name].values()].map(copy),put=async(name,rows)=>rows.forEach(row=>stores[name].set(row.id,copy(row))),remove=async(name,id)=>stores[name].delete(id);
   const database={transaction(){
-    const tx={objectStore(name){return {getAll(){const request={};setTimeout(()=>{request.result=[...stores[name].values()].map(copy);request.onsuccess?.();setTimeout(()=>tx.oncomplete?.(),0);},0);return request;},get(id){const request={};setTimeout(()=>{request.result=copy(stores[name].get(id));request.onsuccess?.();setTimeout(()=>tx.oncomplete?.(),0);},0);return request;},put(row){stores[name].set(row.id,copy(row));},delete(id){stores[name].delete(id);}};}};return tx;
+    const tx={objectStore(name){return {getAll(){const request={};setTimeout(()=>{request.result=[...stores[name].values()].map(copy);request.onsuccess?.();setTimeout(()=>tx.oncomplete?.(),0);},0);return request;},get(id){const request={};setTimeout(()=>{request.result=copy(stores[name].get(id));request.onsuccess?.();setTimeout(()=>tx.oncomplete?.(),0);},0);return request;},put(row){stores[name].set(row.id,copy(row));setTimeout(()=>tx.oncomplete?.(),0);},delete(id){stores[name].delete(id);}};}};return tx;
   }};
   let row=copy(remote),updates=0,beforeWrite=null;
   const client={from(){let patch,version,insert=false;return {
@@ -55,4 +55,8 @@ test('a late sync response cannot overwrite newer or still-pending local data',a
 test('server inventory removes obsolete cached records but never erases pending edits',async()=>{
   const f=fixture(event);f.stores.events.set('revoked',{...event,id:'revoked'});f.stores.events.set('pending',{...event,id:'pending',title:'Offline edit'});await f.queue({...event,id:'pending',mutationId:'p'});
   await f.engine.applyRemote([event]);assert.equal(f.stores.events.has('revoked'),false);assert.equal(f.stores.events.get('pending').title,'Offline edit');assert.equal(f.stores.outbox.has('pending'),true);
+});
+test('a new offline event can be edited before its first upload without a false deletion conflict',async()=>{
+ const f=fixture(null);f.state.events=[];const initial={...event,version:0};await f.engine.saveMany([initial],{flush:false});assert.equal(f.updates,0);assert.equal(f.stores.outbox.get(event.id).base,null);
+ f.state.editing=initial;await f.engine.save({...initial,title:'Edited offline draft'});assert.equal(f.row.title,'Edited offline draft');assert.equal(f.stores.outbox.size,0);
 });

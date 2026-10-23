@@ -35,7 +35,7 @@ export function installUpcoming({state,openEditor,openDeadline,save,closeMenu,re
   function update(){
     const old=$('#upcomingPeek');if(!state.user){old?.remove();if(modal.open)modal.close();return;}
     if(modal.open)draw();
-    const calendar=!state.invites&&!state.chat&&!state.tasks&&!state.all&&!state.month;
+    const calendar=!state.tasks&&!state.all&&!state.month;
     if(calendar){const data=upcomingSummary(state.events,state.user),peek=node('button',undefined,'upcomingPeek');peek.id='upcomingPeek';peek.type='button';peek.append(node('small',data.next?startsIn(data.next):'Ближайшее'),node('strong',data.next?.title||'События, дела и дедлайны'),node('span',`${data.tasks.length} дел · ${data.today.length} событий сегодня  ›`));peek.onclick=show;old?.remove();$('#spaces').prepend(peek);}else old?.remove();
     if(deepLink){deepLink=false;show();}
   }

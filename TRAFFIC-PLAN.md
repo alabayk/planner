@@ -1,5 +1,16 @@
 # Traffic reduction plan
 
+## v71: retired sections and schedule delivery
+
+- Chat and the Together/invitations section are removed from the shipped UI, module cache, polling and worker cron.
+- Legacy endpoints return 410 without querying Auth or the database. Old chat/invitation push jobs are excluded from delivery.
+- Existing server-side history is left untouched; this release does not purge user data.
+- The approved 18-class schedule for 26-31 October is bundled for offline queueing with stable IDs. It is marked uploaded only after an authorized server inventory confirms every expected ID.
+- An expired session can be refreshed when its refresh token remains valid. Otherwise a re-login action is shown, without clearing the local cache/outbox.
+- The freshness label advances only after a successful server read, not after a local midnight refresh.
+
+The v70 details below describe the earlier optimization. All chat/invitation checks mentioned there are now retired.
+
 ## 1. Economy mode — implemented in v70
 
 - Active client checks start at 60 seconds. With no changes, they slow to 5 minutes.

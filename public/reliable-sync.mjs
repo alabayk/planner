@@ -62,7 +62,7 @@ export function createEventSync({client,state,all,put,remove,dbp,render,fromRow,
       for(let pass=0;pass<4;pass++){
         const jobs=(await all('outbox')).filter(e=>!e.conflict);
         if(!jobs.length)break;
-        for(const job of jobs)try{await post(job);}catch(error){failure=error;}
+        for(const job of jobs)try{await post(job);}catch(error){failure=error;break;}
         if(failure)break;
       }
       await show();if(failure)throw failure;
@@ -75,7 +75,7 @@ export function createEventSync({client,state,all,put,remove,dbp,render,fromRow,
     const queued=(await all('outbox')).find(e=>e.id===event.id);
     const previous=state.events.find(e=>e.id===event.id);
     const {_base,...cleanEvent}=event;
-    const job={...cleanEvent,version:event.version||0,base:queued?.base||editingBase||(previous?.version&&previous.version===event.version?snapshot(previous):null),mutationId:crypto.randomUUID()};
+    const job={...cleanEvent,version:event.version||0,base:queued?queued.base:editingBase||(previous?.version&&previous.version===event.version?snapshot(previous):null),mutationId:crypto.randomUUID()};
     state.events=state.events.filter(e=>e.id!==job.id).concat(job);
     const database=await dbp;await new Promise((resolve,reject)=>{const tx=database.transaction(['events','outbox'],'readwrite');tx.objectStore('events').put(job);tx.objectStore('outbox').put(job);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});render();await show();
     try{await flush();render();}catch{await show('Нет связи. Изменения сохранены на устройстве и будут отправлены повторно.');}
@@ -132,16 +132,16 @@ export function createEventSync({client,state,all,put,remove,dbp,render,fromRow,
     const pendingIds=new Set((await all('outbox')).map(e=>e.id)),remoteIds=new Set(remote.map(e=>e.id));
     state.events=(await all('events')).filter(e=>pendingIds.has(e.id)||remoteIds.has(e.id));
   }
-  async function saveMany(events){
+  async function saveMany(events,{flush:send=true}={}){
     const queued=new Map((await all('outbox')).map(e=>[e.id,e]));
     const jobs=events.map(event=>{
       const previous=state.events.find(e=>e.id===event.id),prior=queued.get(event.id);
       const {_base,...cleanEvent}=event;
-      return {...cleanEvent,version:event.version||0,base:prior?.base||(event._base?snapshot(event._base):previous?.version&&previous.version===event.version?snapshot(previous):null),mutationId:crypto.randomUUID()};
+      return {...cleanEvent,version:event.version||0,base:prior?prior.base:(event._base?snapshot(event._base):previous?.version&&previous.version===event.version?snapshot(previous):null),mutationId:crypto.randomUUID()};
     });
     const database=await dbp;await new Promise((resolve,reject)=>{const tx=database.transaction(['events','outbox'],'readwrite');for(const job of jobs){tx.objectStore('events').put(job);tx.objectStore('outbox').put(job);}tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});
     const ids=new Set(jobs.map(e=>e.id));state.events=state.events.filter(e=>!ids.has(e.id)).concat(jobs);render();await show();
-    flush().then(()=>render()).catch(()=>show('Серия сохранена на устройстве и будет отправлена при восстановлении связи.'));
+    if(send)flush().then(()=>render()).catch(()=>show('Серия сохранена на устройстве и будет отправлена при восстановлении связи.'));
   }
   return {save,post,flush,show,applyRemote,saveMany};
 }

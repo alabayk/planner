@@ -9,10 +9,6 @@ grant select, insert, update on public.planner_events to service_role;
 -- Optional modules may not have been installed in every deployment.
 do $$
 begin
-  if to_regclass('public.planner_messages') is not null then
-    grant select, insert on public.planner_messages to authenticated;
-    grant select, insert, update, delete on public.planner_messages to service_role;
-  end if;
   if to_regclass('public.push_jobs') is not null then
     grant select, insert, update, delete on public.push_jobs to authenticated, service_role;
   end if;

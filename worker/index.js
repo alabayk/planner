@@ -1,6 +1,5 @@
 import {calendarSyncDue} from "./traffic-policy.mjs";
 import webpush from "web-push";
-import {handleInvitations,processInvitations} from "./invitations.mjs";
 import {safeError,checkedJson,unavailable} from "./api-errors.mjs";
 import { handleCalendarRequest, syncCalendars } from "./calendar.js";
 
@@ -14,7 +13,6 @@ const cors = {
 };
 
 const json = (body, status = 200) => Response.json(body, { status, headers: cors });
-const notificationPayload = (payload, job) => job.kind === "chat" ? JSON.stringify({ title: "Новое сообщение", body: job.title, url: "./?view=chat" }) : job.kind === "invite" ? JSON.stringify({title:"Приглашение",body:job.title,url:"./?view=invites&event="+job.event_id,tag:"invite-"+job.event_id}) : payload;
 
 async function proxySupabase(request, env, url) {
   const target = new URL(env.SUPABASE_URL + url.pathname.slice(3) + url.search);
@@ -67,7 +65,7 @@ async function adminDb(env, path, init = {}) {
 
 async function deliverQueue(env) {
   if (!env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("SUPABASE_SERVICE_ROLE_KEY is missing");
-  const jobsResponse = await adminDb(env, `push_jobs?select=id,event_id,created_by,target_user_id,title,audience,kind&processed_at=is.null&deliver_at=lte.${encodeURIComponent(new Date().toISOString())}&order=deliver_at.asc&limit=20`);
+  const jobsResponse = await adminDb(env, `push_jobs?select=id,event_id,created_by,target_user_id,title,audience,kind&kind=not.in.(chat,invite)&processed_at=is.null&deliver_at=lte.${encodeURIComponent(new Date().toISOString())}&order=deliver_at.asc&limit=20`);
   if (!jobsResponse.ok) throw new Error(await jobsResponse.text());
   const jobs = await jobsResponse.json();
   webpush.setVapidDetails("mailto:noreply@planer.app", env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
@@ -77,7 +75,7 @@ async function deliverQueue(env) {
     const subscriptionsResponse = await adminDb(env, `push_subscriptions?select=subscription${filter?'&'+filter:''}`);
     const subscriptions = subscriptionsResponse.ok ? await subscriptionsResponse.json() : [];
     const payload = JSON.stringify({ title: job.kind === "test" ? "Проверка уведомлений" : job.kind === "deadline_soon" ? "Осталась 1 минута до дедлайна" : job.kind === "deadline_due" ? "Срок истёк" : job.kind === "deadline" ? "Напоминание о дедлайне" : "Новое общее событие", body: job.kind === "test" ? "Уведомления работают" : job.title, url: "/vmeste-planner/" });
-    const results = await Promise.allSettled(subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, notificationPayload(payload, job))));
+    const results = await Promise.allSettled(subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, payload)));
     await adminDb(env, `push_jobs?id=eq.${job.id}`, { method: "PATCH", body: JSON.stringify({ processed_at: new Date().toISOString() }) });
     console.log(JSON.stringify({ event: "queued-push", job: job.id, subscriptions: subscriptions.length, sent: results.filter(r => r.status === "fulfilled").length, failed: results.filter(r => r.status === "rejected").map(r => String(r.reason?.message || r.reason)) }));
   }
@@ -87,11 +85,8 @@ export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/sb/")) return proxySupabase(request, env, url);
-    if (url.pathname.startsWith("/invites/")) {
-      try {return await handleInvitations(request,env,await currentUser(request,env));}
-      catch(error){return json({error:safeError(error)},503);}
-    }
+    if (url.pathname.startsWith("/sb/") && !url.pathname.startsWith("/sb/rest/v1/planner_messages")) return proxySupabase(request, env, url);
+    if (url.pathname.startsWith("/invites/") || url.pathname.startsWith("/sb/rest/v1/planner_messages")) return json({error:"Этот раздел удалён из Планера."},410);
     if (["/google/callback", "/google/connect", "/google/status", "/google/sync", "/google/resolve"].includes(url.pathname)) {
       try {
         const user = url.pathname === "/google/callback" ? null : await currentUser(request, env);
@@ -100,7 +95,7 @@ export default {
         return json({ error: safeError(error) }, 500);
       }
     }
-    if (request.method === "GET") return json({ ok: true, syncRevision: 70, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
+    if (request.method === "GET") return json({ ok: true, syncRevision: 71, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
     try {
       const user = await currentUser(request, env);
@@ -147,6 +142,6 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(Promise.all([processInvitations(env).catch(error=>console.error(safeError(error))).then(()=>deliverQueue(env)), calendarSyncDue(_controller.scheduledTime)?syncCalendars(env):Promise.resolve()]));
+    ctx.waitUntil(Promise.all([deliverQueue(env), calendarSyncDue(_controller.scheduledTime)?syncCalendars(env):Promise.resolve()]));
   },
 };
