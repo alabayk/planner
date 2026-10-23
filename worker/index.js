@@ -35,7 +35,8 @@ async function currentUser(request, env) {
     headers: { authorization, apikey: env.SUPABASE_PUBLISHABLE_KEY },
     signal:AbortSignal.timeout(12000),
   });
-  return response.ok ? checkedJson(response) : null;
+  if(response.status===401||response.status===403)return null;
+  return checkedJson(response);
 }
 
 async function db(request, env, path, init = {}) {
@@ -73,10 +74,18 @@ async function deliverQueue(env) {
     const audience = job.audience.replace(/_(due|soon)$/, "");
     const filter = job.target_user_id ? `user_id=eq.${job.target_user_id}` : audience === "all" ? "" : audience === "self" ? `user_id=eq.${job.created_by}` : `user_id=neq.${job.created_by}`;
     const subscriptionsResponse = await adminDb(env, `push_subscriptions?select=subscription${filter?'&'+filter:''}`);
-    const subscriptions = subscriptionsResponse.ok ? await subscriptionsResponse.json() : [];
-    const payload = JSON.stringify({ title: job.kind === "test" ? "Проверка уведомлений" : job.kind === "deadline_soon" ? "Осталась 1 минута до дедлайна" : job.kind === "deadline_due" ? "Срок истёк" : job.kind === "deadline" ? "Напоминание о дедлайне" : "Новое общее событие", body: job.kind === "test" ? "Уведомления работают" : job.title, url: "/vmeste-planner/" });
+    if(!subscriptionsResponse.ok)throw new Error('Push subscriptions unavailable: '+subscriptionsResponse.status);
+    const subscriptions = await subscriptionsResponse.json();
+    const payload = JSON.stringify({ title: job.kind === "test" ? "Проверка уведомлений" : job.kind === "deadline_soon" ? "Осталась 1 минута до дедлайна" : job.kind === "deadline_due" ? "Срок истёк" : job.kind === "deadline" ? "Напоминание о дедлайне" : "Новое общее событие", body: job.kind === "test" ? "Уведомления работают" : job.title, url: "./" });
     const results = await Promise.allSettled(subscriptions.map(({ subscription }) => webpush.sendNotification(subscription, payload)));
-    await adminDb(env, `push_jobs?id=eq.${job.id}`, { method: "PATCH", body: JSON.stringify({ processed_at: new Date().toISOString() }) });
+    const sent=results.filter(result=>result.status==='fulfilled').length;
+    // Retry an undelivered job on the next tick instead of silently losing it.
+    // Successful partial delivery is not replayed, to avoid duplicate notifications.
+    if(results.some(result=>result.status==='rejected'&&![404,410].includes(result.reason?.statusCode))&&!sent){
+      console.error(JSON.stringify({event:'queued-push-retry',job:job.id}));continue;
+    }
+    const processed=await adminDb(env, `push_jobs?id=eq.${job.id}`, { method: "PATCH", body: JSON.stringify({ processed_at: new Date().toISOString() }) });
+    if(!processed.ok)throw new Error('Push acknowledgement failed: '+processed.status);
     console.log(JSON.stringify({ event: "queued-push", job: job.id, subscriptions: subscriptions.length, sent: results.filter(r => r.status === "fulfilled").length, failed: results.filter(r => r.status === "rejected").map(r => String(r.reason?.message || r.reason)) }));
   }
 }
@@ -95,7 +104,7 @@ export default {
         return json({ error: safeError(error) }, 500);
       }
     }
-    if (request.method === "GET") return json({ ok: true, syncRevision: 72, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
+    if (request.method === "GET") return json({ ok: true, syncRevision: 74, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
     try {
       const user = await currentUser(request, env);
@@ -127,8 +136,8 @@ export default {
         const rows = await response.json();
       webpush.setVapidDetails("mailto:noreply@planer.app", env.VAPID_PUBLIC_KEY, env.VAPID_PRIVATE_KEY);
         const payload = JSON.stringify(body.action === "test"
-          ? { title: "Планер", body: "Уведомления работают", url: "/vmeste-planner/" }
-          : { title: "Новый общий план", body: body.title, url: "/vmeste-planner/" });
+          ? { title: "Планер", body: "Уведомления работают", url: "./" }
+          : { title: "Новый общий план", body: body.title, url: "./" });
         const results = await Promise.allSettled(rows.map(({ subscription }) => webpush.sendNotification(subscription, payload)));
         const sent = results.filter((result) => result.status === "fulfilled").length;
         const failed = results.filter((result) => result.status === "rejected").map((result) => String(result.reason?.message || result.reason));

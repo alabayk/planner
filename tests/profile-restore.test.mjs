@@ -36,5 +36,5 @@ test('missing session and unknown identities show the chooser instead of opening
 test('initial HTML hides the chooser and offline cache includes the new restore code',async()=>{
   const index=await fs.readFile(new URL('../public/index.html',import.meta.url),'utf8'),sw=await fs.readFile(new URL('../public/sw.js',import.meta.url),'utf8');
   assert.match(index,/<section id="chooser" hidden>/);assert.match(index,/id="sessionLoading"/);assert.match(sw,/'\.\/profile-restore\.mjs'/);
-  assert.match(index,/app\.js\?v=73/);assert.match(sw,/app\.js\?v=73/);
+  const asset=index.match(/\.\/app\.js\?v=\d+/)?.[0];assert.ok(asset);assert.ok(sw.includes(asset));
 });

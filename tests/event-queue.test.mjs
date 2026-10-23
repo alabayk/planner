@@ -3,23 +3,23 @@ import assert from 'node:assert/strict';
 import {createEventSync} from '../public/reliable-sync.mjs';
 const event={id:'event',title:'Meeting',notes:'',startsAt:'2026-10-20T10:00:00Z',durationMinutes:60,space:'shared',createdBy:'owner',done:false,deleted:false,version:1};
 function fixture(remote){
-  const stores={events:new Map(),outbox:new Map()},copy=x=>structuredClone(x);
+  const stores={events:new Map(),outbox:new Map()},copy=x=>structuredClone(x),controls={abortWrites:false};
   const all=async name=>[...stores[name].values()].map(copy),put=async(name,rows)=>rows.forEach(row=>stores[name].set(row.id,copy(row))),remove=async(name,id)=>stores[name].delete(id);
   const database={transaction(){
-    const tx={objectStore(name){return {getAll(){const request={};setTimeout(()=>{request.result=[...stores[name].values()].map(copy);request.onsuccess?.();setTimeout(()=>tx.oncomplete?.(),0);},0);return request;},get(id){const request={};setTimeout(()=>{request.result=copy(stores[name].get(id));request.onsuccess?.();setTimeout(()=>tx.oncomplete?.(),0);},0);return request;},put(row){stores[name].set(row.id,copy(row));setTimeout(()=>tx.oncomplete?.(),0);},delete(id){stores[name].delete(id);}};}};return tx;
+    const tx={objectStore(name){return {getAll(){const request={};setTimeout(()=>{request.result=[...stores[name].values()].map(copy);request.onsuccess?.();setTimeout(()=>tx.oncomplete?.(),0);},0);return request;},get(id){const request={};setTimeout(()=>{request.result=copy(stores[name].get(id));request.onsuccess?.();setTimeout(()=>tx.oncomplete?.(),0);},0);return request;},put(row){if(controls.abortWrites){tx.error=Error('QuotaExceededError');queueMicrotask(()=>tx.onabort?.());return;}stores[name].set(row.id,copy(row));setTimeout(()=>tx.oncomplete?.(),0);},delete(id){stores[name].delete(id);}};}};return tx;
   }};
-  let row=copy(remote),updates=0,beforeWrite=null;
+  let row=copy(remote),updates=0,beforeWrite=null,beforeRead=null;
   const client={from(){let patch,version,insert=false;return {
     select(){return this;},eq(key,value){if(key==='version')version=value;return this;},
     update(value){patch=value;return this;},insert(value){patch=value;insert=true;return this;},
-    async maybeSingle(){if(!patch)return {data:copy(row),error:null};if(beforeWrite){const fn=beforeWrite;beforeWrite=null;await fn();}if(row?.version!==version)return {data:null,error:null};row=copy(patch);updates++;return {data:copy(row),error:null};},
+    async maybeSingle(){if(!patch){if(beforeRead){const fn=beforeRead;beforeRead=null;await fn();}return {data:copy(row),error:null};}if(beforeWrite){const fn=beforeWrite;beforeWrite=null;await fn();}if(row?.version!==version)return {data:null,error:null};row=copy(patch);updates++;return {data:copy(row),error:null};},
     async single(){if(insert&&row)return {error:{code:'23505'}};row=copy(patch);updates++;return {data:copy(row),error:null};}
   };}};
   const node=()=>({append(){},after(){},replaceChildren(){},classList:{},hidden:false});
   globalThis.document={getElementById:()=>node(),createElement:()=>node()};
   const state={events:[copy(event)]};
   const engine=createEventSync({client,state,all,put,remove,dbp:Promise.resolve(database),render(){},fromRow:x=>x,toRow:x=>({...x,version:Number(x.version||0)+1})});
-  return {engine,stores,state,get row(){return row;},get updates(){return updates;},setRow:value=>{row=copy(value);},beforeWrite:fn=>{beforeWrite=fn;},queue:async job=>put('outbox',[job])};
+  return {engine,stores,state,controls,get row(){return row;},get updates(){return updates;},setRow:value=>{row=copy(value);},beforeRead:fn=>{beforeRead=fn;},beforeWrite:fn=>{beforeWrite=fn;},queue:async job=>put('outbox',[job])};
 }
 test('device merges its title with server time using a conditional update',async()=>{
   const f=fixture({...event,startsAt:'2026-10-20T11:00:00Z',version:2});
@@ -59,4 +59,13 @@ test('server inventory removes obsolete cached records but never erases pending 
 test('a new offline event can be edited before its first upload without a false deletion conflict',async()=>{
  const f=fixture(null);f.state.events=[];const initial={...event,version:0};await f.engine.saveMany([initial],{flush:false});assert.equal(f.updates,0);assert.equal(f.stores.outbox.get(event.id).base,null);
  f.state.editing=initial;await f.engine.save({...initial,title:'Edited offline draft'});assert.equal(f.row.title,'Edited offline draft');assert.equal(f.stores.outbox.size,0);
+});
+test('a failed device transaction cannot show an unsaved edit as committed',async()=>{
+  const f=fixture(event);f.controls.abortWrites=true;await assert.rejects(f.engine.save({...event,title:'Unsaved'}),/QuotaExceeded/);
+  assert.equal(f.state.events[0].title,event.title);assert.equal(f.stores.outbox.size,0);assert.equal(f.updates,0);
+});
+test('a deletion response cannot replace a newer queued edit with an older conflict',async()=>{
+  const f=fixture(null),job={...event,title:'Old edit',base:event,mutationId:'old'};await f.queue(job);
+  f.beforeRead(()=>f.queue({...job,title:'New edit',mutationId:'new'}));await f.engine.post(job);
+  assert.equal(f.stores.outbox.get(event.id).title,'New edit');assert.equal(f.stores.outbox.get(event.id).conflict,undefined);
 });

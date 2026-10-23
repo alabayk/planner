@@ -27,3 +27,15 @@ test('offline service worker only substitutes HTML for page navigation, never AP
   const script=await call({url:'https://example.test/planner/api.mjs',method:'GET',mode:'cors'});assert.equal(script.status,503);assert.ok(!(await script.text()).includes('<html'));
   const page=await call({url:'https://example.test/planner/?view=invites',method:'GET',mode:'navigate'});assert.match(await page.text(),/cached app/);assert.equal(puts.length,0);
 });
+test('offline update retains the previous SDK cache instead of activating a broken app shell',async()=>{
+  const source=await fs.readFile(new URL('../public/sw.js',import.meta.url),'utf8');
+  for(const available of [true,false]){
+    const handlers={},stored=[],sdk=new Response('window.supabase={}',{headers:{'Content-Type':'text/javascript'}});
+    const cache={put:async(url)=>stored.push(String(url))};
+    vm.runInNewContext(source,{URL,Response,console,self:{location:new URL('https://example.test/planner/sw.js'),addEventListener:(type,fn)=>handlers[type]=fn,skipWaiting:async()=>{}},
+      caches:{open:async()=>cache,match:async()=>available?sdk.clone():undefined},fetch:async url=>{if(String(url).includes('cdn.jsdelivr.net'))throw Error('CDN offline');return new Response('asset',{headers:{'Content-Type':'text/javascript'}});}});
+    let installed;handlers.install({waitUntil(value){installed=value;}});
+    if(available){await installed;assert.ok(stored.some(url=>url.includes('cdn.jsdelivr.net')));}
+    else await assert.rejects(installed,/Offline SDK unavailable/);
+  }
+});
