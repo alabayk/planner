@@ -1,5 +1,14 @@
 # Traffic reduction plan
 
+## v72: server-side revision cache without SQL
+
+- Calendar cycles check event IDs, versions and update timestamps instead of repeatedly downloading unchanged descriptions.
+- Full event bodies are fetched only for new/changed IDs, in batches; inventory is paginated and includes deletion tombstones.
+- Cache is private to a warm worker isolate, scoped to the backend credentials and capped at 8 MiB. Cold starts rebuild it safely; savings depend on isolate reuse.
+- Manual Google sync and a full rebuild every 30 minutes recover unversioned administrative edits. Failed reads never fall back to stale data for calendar writes.
+- Overlapping cron/manual calendar cycles in the same isolate share one operation. Reminder cadence remains one minute, Google cadence remains five minutes.
+- No SQL migration is needed. This does not remove the host's read-only restriction or guarantee a monthly traffic percentage.
+
 ## v71: retired sections and schedule delivery
 
 - Chat and the Together/invitations section are removed from the shipped UI, module cache, polling and worker cron.
