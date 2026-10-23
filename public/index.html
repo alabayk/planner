@@ -16,11 +16,15 @@
   <link rel="stylesheet" href="./event-types.css?v=65">
   <link rel="stylesheet" href="./quick-event.css?v=67">
   <link rel="stylesheet" href="./upcoming.css?v=68">
-  <link rel="stylesheet" href="./session.css?v=71">
+  <link rel="stylesheet" href="./session.css?v=73">
   <title>Планер</title>
 </head>
 <body>
-  <section id="chooser">
+  <section id="sessionLoading" class="sessionLoading" role="status" aria-live="polite">
+    <p>Открываем календарь…</p>
+    <button id="chooseProfile" type="button" hidden>Войти вручную</button>
+  </section>
+  <section id="chooser" hidden>
     <div class="logo">ВК</div>
     <p class="eyebrow">планер для двоих</p>
     <h1>Кто ты?</h1>
@@ -85,6 +89,6 @@
 
   <template id="card"><article><button class="check" aria-label="Готово"></button><div class="cardBody"><time></time><h3></h3><p></p></div><button class="more" aria-label="Действия">•••</button></article></template>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script type="module" src="./app.js?v=71"></script>
+  <script type="module" src="./app.js?v=73"></script>
 </body>
 </html>

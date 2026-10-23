@@ -1,4 +1,5 @@
 import {createSessionManager,SessionRequired} from './session.mjs';
+import {createProfileRestore} from './profile-restore.mjs';
 import {WEEKLY_SCHEDULE,SCHEDULE_WEEK,SCHEDULE_VERSION,queueWeeklySchedule,scheduleConfirmed} from './schedule-20261026.mjs';
 import {readCompactSnapshot} from './compact-sync.mjs';
 import {createLiveSync} from './live-sync.mjs';
@@ -12,7 +13,7 @@ import {createEventSync} from './reliable-sync.mjs';
 import {refreshCalendarConnection} from './calendar-health.mjs';
 const $=s=>document.querySelector(s),state={user:'',pendingUser:'',date:new Date(),month:false,monthDate:new Date(2026,8,1),events:[],all:false,tasks:false,hidePersonal:false,editing:null,taskEditing:null,autoFocused:false,syncedOnce:false,remoteState:new Map};
 const CALENDAR_SYNC_URL='https://vmeste-planner-push.ivan-dremach.workers.dev',SUPABASE_PROXY_URL=CALENDAR_SYNC_URL+'/sb';
-const client=window.supabase.createClient(SUPABASE_PROXY_URL,'sb_publishable_AUwkIutAMM4DVknnLQodsCU5lA4w',{global:{fetch:safeSupabaseFetch}});
+const client=window.supabase.createClient(SUPABASE_PROXY_URL,'sb_publishable_AUwkIutAMM4DVknnLQodsCU5lA4w',{auth:{persistSession:true,autoRefreshToken:true},global:{fetch:safeSupabaseFetch}});
 const sessions=createSessionManager(client.auth);
 async function requireSession(){const session=await sessions.requireSession();if(state.user&&session.user?.email!==state.user+'@planer.app')throw new SessionRequired();return session;}
 function hideSessionNotice(){const notice=$('#sessionNotice');if(notice)notice.hidden=true;}
@@ -212,7 +213,13 @@ ALL_SCHEDULE.push(...CRYPTO_SCHEDULE.map(row=>[...row,90,'vanya']));
 async function seedSchedule(){const marker=`seed-schedule:${state.user}:${ALL_SCHEDULE.length}:${ALL_SCHEDULE.at(-1)?.[0]}`;if(localStorage.getItem(marker)==='1')return;const ids=ALL_SCHEDULE.map(x=>x[0]),{data,error}=await client.from('planner_events').select('id').in('id',ids);if(error)throw error;const existing=new Set(data.map(x=>x.id)),missing=ALL_SCHEDULE.filter(x=>!existing.has(x[0])).map(([id,startsAt,title,notes,durationMinutes=80,createdBy='ksusha'])=>toRow({id,title,notes,startsAt:new Date(startsAt).toISOString(),durationMinutes,space:'shared',createdBy,done:false,deleted:false,version:0}));if(missing.length){const{error:insertError}=await client.from('planner_events').upsert(missing,{onConflict:'id',ignoreDuplicates:true});if(insertError)throw insertError;await sync()}localStorage.setItem(marker,'1')}
 function scheduleMidnightRefresh(){const next=new Date();next.setHours(24,0,1,0);setTimeout(()=>{state.date=new Date();render();cacheWeeks().catch(()=>{});scheduleMidnightRefresh()},next-Date.now())}
 async function start(){if(!state.user)return;state.hidePersonal=localStorage.getItem(`hide-personal-${state.user}`)==='1';document.body.dataset.user=state.user;document.querySelector('meta[name="theme-color"]').content=state.user==='vanya'?'#63b795':'#f486a8';$('#chooser').hidden=true;$('#app').hidden=false;setupPullToRefresh();renderProfilePhoto();state.events=await all('events');await queueWeeklySchedule({profile:state.user,all,saveMany:reliableSync.saveMany});state.events=await all('events');render();liveSync.start();const connected=await sync();if(connected)refreshCalendarStatus().catch(()=>{});if(connected)await seedSchedule().catch(error=>{$('#offline').hidden=false;$('#offline').textContent='Не удалось загрузить расписание · '+publicError(error)});if(connected)await migrateLoadedEvents().catch(error=>{$('#offline').hidden=false;$('#offline').textContent='Не удалось перенести старые события · '+publicError(error)});if('Notification'in window&&Notification.permission==='granted')ensureNotifications().catch(()=>localStorage.removeItem(`push-registered-${state.user}`));if(connected)state.events.filter(e=>!e.deleted&&isDeadline(e)&&e.createdBy===state.user&&new Date(e.startsAt)>new Date()).forEach(e=>queueDeadline(e,false).catch(()=>{}));navigator.storage?.persist?.().catch(()=>{});liveSync.start();scheduleMidnightRefresh()}
-async function boot(){const cached=localStorage.getItem('planner-last-profile');if(cached==='vanya'||cached==='ksusha'){state.user=cached;start();return;}try{const session=await sessions.requireSession(),profile=(session.user?.email||'').split('@')[0];if(profile==='vanya'||profile==='ksusha'){state.user=profile;localStorage.setItem('planner-last-profile',profile);start();}}catch{}}
+const profileRestore=createProfileRestore({storage:localStorage,profiles:[...document.querySelectorAll('[data-person]')].map(button=>button.dataset.person),requireSession:()=>sessions.requireSession(),
+  onRestore:async profile=>{$('#sessionLoading').hidden=true;$('#chooser').hidden=true;closeLogin();state.user=profile;await start();},
+  onChoose:()=>{$('#sessionLoading').hidden=true;$('#chooser').hidden=false;},
+  onSlow:()=>{$('#chooseProfile').hidden=false;},
+});
+$('#chooseProfile').onclick=()=>profileRestore.choose();
+async function boot(){try{await profileRestore.start();}catch{profileRestore.choose();}}
 const eventEditor=installEventEditor({state,saveSeries,closeEditor,ensureNotifications,linkedCopies});
 installQuickEvent({openEditor});
 const upcoming=installUpcoming({state,openEditor,openDeadline,save,closeMenu,refresh:refreshEverything});
