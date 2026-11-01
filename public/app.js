@@ -1,3 +1,4 @@
+import {createLoginRequest} from './login-request.mjs';
 import {installTrafficBudget} from './traffic-budget.mjs';
 import {createSessionManager,SessionRequired} from './session.mjs';
 import {escapeHtml,writeTransaction} from './ui-safety.mjs';
@@ -132,9 +133,8 @@ function openLogin(person){state.pendingUser=person;$('#loginTitle').textContent
 function closeLogin(){state.pendingUser='';if($('#login').open)$('#login').close()}
 $('#closeLogin').onclick=$('#cancelLogin').onclick=closeLogin;
 $('#login').onclick=e=>{if(e.target===$('#login'))closeLogin()};
-const authTimeout=(promise,ms=6500)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error('AUTH_TIMEOUT')),ms))]);
-const authErrorText=error=>/invalid login|invalid credentials/i.test(error?.message||'')?'Неверный PIN-код':/timeout|fetch|network|load failed|failed to fetch/i.test(error?.message||'')?'Сервер входа временно недоступен. Повторите попытку.':'Не удалось войти. Повторите попытку.';
-async function signInResilient(email,password){let lastError;for(let attempt=0;attempt<2;attempt++)try{const result=await authTimeout(client.auth.signInWithPassword({email,password}));if(result.error)throw result.error;return result}catch(error){lastError=error;if(/invalid login|invalid credentials/i.test(error?.message||''))break;if(!attempt)await new Promise(resolve=>setTimeout(resolve,500))}throw lastError}
+const authErrorText=error=>/invalid login|invalid credentials/i.test(error?.message||'')?'Неверный PIN-код':error?.code==='AUTH_TIMEOUT'?'Сервер входа не ответил за 20 секунд. Запрос ещё может завершаться. Закройте и снова откройте Планер, если ошибка повторяется.':`Не удалось войти (код ${error?.status||error?.code||'NETWORK'}). ${publicError(error)}`;
+const signInResilient=createLoginRequest(client.auth);
 $('#loginForm').onsubmit=async e=>{e.preventDefault();const person=state.pendingUser,pin=$('#pin').value,button=e.submitter||$('#loginForm [type="submit"]'),oldText=button.textContent;button.disabled=true;button.textContent='Входим…';$('#loginError').hidden=true;try{await signInResilient(`${person}@planer.app`,pin);localStorage.setItem('planner-last-profile',person);closeLogin();state.user=person;hideSessionNotice();start()}catch(error){$('#loginError').textContent=authErrorText(error);$('#loginError').hidden=false}finally{button.disabled=false;button.textContent=oldText}};
 document.querySelectorAll('[data-person]').forEach(b=>b.onclick=()=>openLogin(b.dataset.person));
 let pullRefreshing=false;
