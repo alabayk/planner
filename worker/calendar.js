@@ -1,3 +1,7 @@
+import {createGoogleDeltaReader} from './google-delta.mjs';
+import {googleCacheStorage} from './google-cache.mjs';
+import {createLinkReader} from './link-store.mjs';
+import {meteredFetch,trafficBudget} from './traffic-meter.mjs';
 import {googleBody,plannerFields} from './google-event-model.mjs';
 import {createCalendarSnapshotReader} from './calendar-store.mjs';
 import {CALENDAR_FIELDS,calendarSnapshot,readSignature,recordConflict,compareAndSet,stableImportedRow,mergeCalendar,reconnectNeeded} from './calendar-safety.mjs';
@@ -6,6 +10,7 @@ const BOTH = "\n[[planner:both]]";
 const MAX_WRITES = 10;
 const calendarRows=createCalendarSnapshotReader(admin);
 let calendarCycle=null;
+const googleDelta=createGoogleDeltaReader({storage:googleCacheStorage()}),calendarLinks=createLinkReader(admin);
 
 const ownerOf = user => (user?.email || "").split("@")[0];
 const ordinary = row => !(row.notes || "").startsWith("[[invitation]]") && row.notes !== "__todo__" && !(row.notes || "").startsWith("[[deadline]]");
@@ -20,7 +25,7 @@ async function hash(row) {
 }
 
 async function admin(env, path, init = {}) {
-  const response = await fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
+  const response = await meteredFetch(env,`${env.SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: { apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
       "content-type": "application/json", ...(init.headers || {}) },
@@ -52,25 +57,12 @@ async function accessToken(env, token) {
 
 const eventUrl = (calendar, id = "") => `${GOOGLE}/calendars/${encodeURIComponent(calendar)}/events${id ? "/" + encodeURIComponent(id) : ""}`;
 
-async function listEvents(token, calendar) {
-  const events = new Map(); let pageToken = "";
-  do {
-    const query = new URLSearchParams({ maxResults: "2500", showDeleted: "true" });
-    if (pageToken) query.set("pageToken", pageToken);
-    const page = await google(`${eventUrl(calendar)}?${query}`, token);
-    for(const event of page.items||[]){
-      if(!event.recurrence||event.status==='cancelled'){events.set(event.id,event);continue;}
-      let instancePage='';const from=new Date();from.setDate(from.getDate()-31);const to=new Date();to.setFullYear(to.getFullYear()+1);
+async function listEvents(token,calendar){return googleDelta(calendar,async({syncToken,pageToken})=>{const query=new URLSearchParams({maxResults:'2500',showDeleted:'true'});if(syncToken)query.set('syncToken',syncToken);if(pageToken)query.set('pageToken',pageToken);return google(eventUrl(calendar)+'?'+query,token);},async event=>{const rows=[];      let instancePage='';const from=new Date();from.setDate(from.getDate()-31);const to=new Date();to.setFullYear(to.getFullYear()+1);
       do{
         const params=new URLSearchParams({maxResults:'2500',showDeleted:'true',timeMin:from.toISOString(),timeMax:to.toISOString()});if(instancePage)params.set('pageToken',instancePage);
         const instances=await google(`${eventUrl(calendar,event.id)}/instances?${params}`,token);
-        for(const instance of instances.items||[])events.set(instance.id,instance);instancePage=instances.nextPageToken||'';
-      }while(instancePage);
-    }
-    pageToken = page.nextPageToken || "";
-  } while (pageToken);
-  return events;
-}
+        for(const instance of instances.items||[])rows.push(instance);instancePage=instances.nextPageToken||'';
+      }while(instancePage);;return rows;});}
 
 async function saveLink(env, row, owner, event) {
   await admin(env, "planner_google_links?on_conflict=planner_id,owner", { method: "POST",
@@ -84,7 +76,7 @@ async function conflict(env, plannerId, owner, reason) {
 async function syncOwner(env, tokenRow, rowsOnce) {
   const owner=tokenRow.owner,token=await accessToken(env,tokenRow),calendar=tokenRow.calendar_id;
   if(!calendar)return;
-  const [rows,links]=await Promise.all([rowsOnce?rowsOnce():admin(env,'planner_events?select=*&order=id'),admin(env,`planner_google_links?select=*&owner=eq.${encodeURIComponent(owner)}`)]);
+  const [rows,links]=await Promise.all([rowsOnce?rowsOnce():admin(env,'planner_events?select=*&order=id'),calendarLinks(env,owner)]);
   const remote=await listEvents(token,calendar),byId=new Map(rows.map(row=>[row.id,row])),byPlanner=new Map(links.map(link=>[link.planner_id,link])),linkedGoogle=new Set(links.map(link=>link.google_id));
   let writes=0;
   for(const [googleId,event]of remote){
@@ -233,7 +225,7 @@ export async function handleCalendarRequest(request, env, user) {
       seen.add(entry.planner_id);
       conflicts.push({id:entry.id,title:payload.local.title,local:payload.local,remote:payload.remote});
     }catch{}
-    return Response.json({syncRevision:74,connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
+    return Response.json({syncRevision:75,traffic:trafficBudget(env),connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
   }
   if(url.pathname==='/google/resolve'&&request.method==='POST'){
     const headers={'Access-Control-Allow-Origin':'*'};

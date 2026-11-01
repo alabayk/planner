@@ -1,3 +1,4 @@
+import {installTrafficBudget} from './traffic-budget.mjs';
 import {createSessionManager,SessionRequired} from './session.mjs';
 import {escapeHtml,writeTransaction} from './ui-safety.mjs';
 import {createDeadlineScheduler} from './deadline-scheduler.mjs';
@@ -229,7 +230,8 @@ const eventEditor=installEventEditor({state,saveSeries,closeEditor,ensureNotific
 installQuickEvent({openEditor});
 const upcoming=installUpcoming({state,openEditor,openDeadline,save,closeMenu,refresh:refreshEverything});
 const renderWithUpcoming=render;render=()=>{renderWithUpcoming();upcoming.update();renderWeeklyNotice();};
-const liveSync=createLiveSync({interval:60000,isActive:()=>!!state.user&&!document.hidden&&navigator.onLine,run:async()=>{const ok=await sync();return ok?{changed:lastEventsChanged}:false;}});
+const trafficControl=installTrafficBudget();
+const liveSync=createLiveSync({interval:60000,isActive:()=>!!state.user&&!document.hidden&&navigator.onLine,run:async()=>{if(!trafficControl.allowAutomatic())return {changed:false};const ok=await sync();return ok?{changed:lastEventsChanged}:false;}});
 window.addEventListener('online',()=>liveSync.tick());window.addEventListener('pageshow',()=>liveSync.tick());document.addEventListener('visibilitychange',()=>{if(!document.hidden)liveSync.tick();});
 const renderPreservingDrafts=render;render=()=>{const drafts=['.taskComposer input'].map(selector=>{const input=document.querySelector(selector);return input?{selector,value:input.value,focused:document.activeElement===input,start:input.selectionStart,end:input.selectionEnd}:null;}).filter(Boolean);renderPreservingDrafts();for(const draft of drafts){const next=document.querySelector(draft.selector);if(!next)continue;next.value=draft.value;if(draft.focused){next.focus({preventScroll:true});next.setSelectionRange(draft.start,draft.end);}}};
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js');setInterval(updateCurrentTimeLine,30000);boot();

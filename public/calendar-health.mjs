@@ -12,7 +12,7 @@ async function check({client,url,sync}){
   try{
     const headers={Authorization:`Bearer ${session.access_token}`};
     const result=await apiJson(url+'/google/status',{headers,timeout:15000});button.disabled=!!result.connected&&!result.requiresReconnect;
-    button.classList.toggle('connected',button.disabled);
+    document.dispatchEvent(new CustomEvent('planner-traffic',{detail:result.traffic}));button.classList.toggle('connected',button.disabled);
     label.textContent=result.requiresReconnect?'Переподключить Google Calendar':result.connected?'Google Calendar подключён':'Подключить Google Calendar';
     button.querySelector('i').textContent=button.disabled?'✓':'→';
     warning.replaceChildren();warning.hidden=!(result.requiresReconnect||result.conflicts?.length||result.checkError);

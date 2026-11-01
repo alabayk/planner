@@ -1,3 +1,4 @@
+import {meteredFetch,flushTraffic,trafficBudget} from './traffic-meter.mjs';
 import {calendarSyncDue} from "./traffic-policy.mjs";
 import webpush from "web-push";
 import {safeError,checkedJson,unavailable} from "./api-errors.mjs";
@@ -20,7 +21,7 @@ async function proxySupabase(request, env, url) {
   headers.set("apikey", env.SUPABASE_PUBLISHABLE_KEY);
   headers.delete("host");
   let response;
-  try { response = await fetch(new Request(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? null : request.body, signal:AbortSignal.timeout(12000), redirect: "manual" }));
+  try { response = await meteredFetch(env,new Request(target, { method: request.method, headers, body: ["GET", "HEAD"].includes(request.method) ? null : request.body, signal:AbortSignal.timeout(12000), redirect: "manual" }));
     if (/text\/html/i.test(response.headers.get("content-type")||"") || /^\s*</.test(await response.clone().text())) return json({message:unavailable,error:unavailable},503);
   } catch { return json({message:unavailable,error:unavailable},503); }
   const responseHeaders = new Headers(response.headers);
@@ -31,7 +32,7 @@ async function proxySupabase(request, env, url) {
 async function currentUser(request, env) {
   const authorization = request.headers.get("Authorization") || "";
   if (!authorization.startsWith("Bearer ")) return null;
-  const response = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+  const response = await meteredFetch(env,`${env.SUPABASE_URL}/auth/v1/user`, {
     headers: { authorization, apikey: env.SUPABASE_PUBLISHABLE_KEY },
     signal:AbortSignal.timeout(12000),
   });
@@ -41,7 +42,7 @@ async function currentUser(request, env) {
 
 async function db(request, env, path, init = {}) {
   const authorization = request.headers.get("Authorization") || "";
-  return fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
+  return meteredFetch(env,`${env.SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: {
       apikey: env.SUPABASE_PUBLISHABLE_KEY,
@@ -53,7 +54,7 @@ async function db(request, env, path, init = {}) {
 }
 
 async function adminDb(env, path, init = {}) {
-  return fetch(`${env.SUPABASE_URL}/rest/v1/${path}`, {
+  return meteredFetch(env,`${env.SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: {
       apikey: env.SUPABASE_SERVICE_ROLE_KEY,
@@ -90,7 +91,7 @@ async function deliverQueue(env) {
   }
 }
 
-export default {
+const worker = {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
     const url = new URL(request.url);
@@ -104,7 +105,7 @@ export default {
         return json({ error: safeError(error) }, 500);
       }
     }
-    if (request.method === "GET") return json({ ok: true, syncRevision: 74, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
+    if (request.method === "GET") return json({ ok: true, syncRevision: 75, vapidConfigured: Boolean(env.VAPID_PRIVATE_KEY), supabaseConfigured: Boolean(env.SUPABASE_SERVICE_ROLE_KEY), calendarConfigured: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
     try {
       const user = await currentUser(request, env);
@@ -151,6 +152,8 @@ export default {
     }
   },
   async scheduled(_controller, env, ctx) {
-    ctx.waitUntil(Promise.all([deliverQueue(env), calendarSyncDue(_controller.scheduledTime)?syncCalendars(env):Promise.resolve()]));
+    ctx.waitUntil(Promise.all([deliverQueue(env), (trafficBudget(env).economy?Math.floor(_controller.scheduledTime/60000)%15===0:calendarSyncDue(_controller.scheduledTime))?syncCalendars(env):Promise.resolve()]).finally(()=>flushTraffic(env)));
   },
 };
+
+export default {fetch:async(request,env,ctx)=>{try{return await worker.fetch(request,env);}finally{if(ctx?.waitUntil)ctx.waitUntil(flushTraffic(env));}},scheduled:worker.scheduled};
