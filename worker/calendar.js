@@ -154,23 +154,24 @@ async function syncOwner(env, tokenRow, rowsOnce) {
   }
 }
 
-export async function syncCalendars(env,{force=false}={}) {
+export async function syncCalendars(env,{force=false,owner=null}={}) {
   if(!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)return;
   // Coalesce overlapping cron/manual cycles only within the same backend/credentials.
-  if(calendarCycle?.url===env.SUPABASE_URL&&calendarCycle.key===env.SUPABASE_SERVICE_ROLE_KEY)return calendarCycle.promise;
-  const cycle={url:env.SUPABASE_URL,key:env.SUPABASE_SERVICE_ROLE_KEY};
+  if(calendarCycle?.url===env.SUPABASE_URL&&calendarCycle.key===env.SUPABASE_SERVICE_ROLE_KEY&&calendarCycle.owner===owner)return calendarCycle.promise;
+  const cycle={url:env.SUPABASE_URL,key:env.SUPABASE_SERVICE_ROLE_KEY,owner};
   calendarCycle=cycle;
-  cycle.promise=runCalendarCycle(env,force);
+  cycle.promise=runCalendarCycle(env,force,owner);
   try{return await cycle.promise;}finally{if(calendarCycle===cycle)calendarCycle=null;}
 }
 
-async function runCalendarCycle(env,force) {
-  const tokens=await admin(env,'planner_google_tokens?select=*');
+async function runCalendarCycle(env,force,owner) {
+  const tokens=await admin(env,'planner_google_tokens?select=*'+(owner?'&owner=eq.'+encodeURIComponent(owner):''));
   // One expired account must not stop synchronization for the other accounts.
   let rowsRequest;const rowsOnce=()=>rowsRequest||(rowsRequest=calendarRows(env,{force}));
-  let failed=0;
-  for(const token of tokens)try{await syncOwner(env,token,rowsOnce);}catch(error){failed++;console.error(JSON.stringify({event:'calendar-sync-error',reconnect:reconnectNeeded(error),message:String(error.message||error)}));}
-  return {ok:failed===0,failed};
+  let failed=0,reason='';const selected=owner?tokens.filter(token=>token.owner===owner):tokens;
+  if(owner&&!selected.length)return {ok:false,failed:1,reason:'Подключение Google для этого профиля не найдено. Переподключите календарь.'};
+  for(const token of selected)try{await syncOwner(env,token,rowsOnce);}catch(error){failed++;const message=String(error.message||error);reason=reconnectNeeded(error)?'Google отклонил разрешение. Переподключите календарь.':/Database (\d+)/.test(message)?'Не удалось прочитать данные синхронизации: HTTP '+message.match(/Database (\d+)/)[1]:/Google (\d+)/.test(message)?'Google Calendar вернул HTTP '+message.match(/Google (\d+)/)[1]:'Нет ответа от сервиса синхронизации. Повторите позже.';console.error(JSON.stringify({event:'calendar-sync-error',reconnect:reconnectNeeded(error),message}));}
+  return {ok:failed===0,failed,reason};
 }
 
 export async function handleCalendarRequest(request, env, user) {
@@ -205,7 +206,7 @@ export async function handleCalendarRequest(request, env, user) {
       body: JSON.stringify({ owner, refresh_token: refresh, access_token: result.access_token,
         expires_at: Date.now() + result.expires_in * 1000, calendar_id: calendar, updated_at: new Date().toISOString() }) });
     await admin(env, `planner_google_states?state=eq.${encodeURIComponent(state)}`, { method: "DELETE" });
-    const initialSync=await syncCalendars(env,{force:true});
+    const initialSync=await syncCalendars(env,{force:true,owner});
     if(initialSync?.ok===false)return new Response('Календарь подключён, но первая синхронизация не завершена. Повторите обновление в Планере.',{status:503,headers:{'content-type':'text/plain; charset=utf-8'}});
     return new Response("Календарь подключён и синхронизирован. Можно закрыть эту страницу.", { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
@@ -225,7 +226,7 @@ export async function handleCalendarRequest(request, env, user) {
       seen.add(entry.planner_id);
       conflicts.push({id:entry.id,title:payload.local.title,local:payload.local,remote:payload.remote});
     }catch{}
-    return Response.json({syncRevision:75,traffic:trafficBudget(env),connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
+    return Response.json({syncRevision:77,traffic:trafficBudget(env),connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
   }
   if(url.pathname==='/google/resolve'&&request.method==='POST'){
     const headers={'Access-Control-Allow-Origin':'*'};
@@ -262,8 +263,8 @@ export async function handleCalendarRequest(request, env, user) {
   }
   if (url.pathname === "/google/sync" && request.method === "POST") {
     if (!user?.id) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Access-Control-Allow-Origin": "*" } });
-    const result=await syncCalendars(env,{force:true});
-    if(result?.ok===false)return Response.json({error:'Не удалось завершить синхронизацию календаря. Повторите обновление позже.'},{status:503,headers:{'Access-Control-Allow-Origin':'*'}});
+    const result=await syncCalendars(env,{force:true,owner:ownerOf(user)||'__missing_profile__'});
+    if(result?.ok===false)return Response.json({error:result.reason||'Не удалось завершить синхронизацию Google Calendar.'},{status:503,headers:{'Access-Control-Allow-Origin':'*'}});
     return Response.json({ ok: true }, { headers: { "Access-Control-Allow-Origin": "*" } });
   }
   if (url.pathname !== "/google/connect" || request.method !== "POST") return null;

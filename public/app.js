@@ -1,3 +1,4 @@
+import {refreshWithCalendar} from './refresh-result.mjs';
 import {createLoginRequest} from './login-request.mjs';
 import {installTrafficBudget} from './traffic-budget.mjs';
 import {createSessionManager,SessionRequired} from './session.mjs';
@@ -140,7 +141,7 @@ document.querySelectorAll('[data-person]').forEach(b=>b.onclick=()=>openLogin(b.
 let pullRefreshing=false;
 async function refreshEverything(){
   if(pullRefreshing||!state.user)return;pullRefreshing=true;const indicator=$('#pullRefresh');indicator.className='pullRefresh refreshing';indicator.innerHTML='<i></i><span>Обновляем…</span>';
-  try{const session=await requireSession();if(!navigator.onLine)throw new Error('Нет подключения к интернету');forceSnapshot=true;const ok=await sync();if(!ok)throw new Error($('#offline').textContent||'Изменения ожидают отправки');await apiJson(CALENDAR_SYNC_URL+'/google/sync',{method:'POST',headers:{Authorization:`Bearer ${session.access_token}`}});if(!await sync())throw new Error($('#offline').textContent||'Не удалось загрузить обновлённые данные');indicator.className='pullRefresh done';indicator.innerHTML='<b>✓</b><span>Обновлено</span>';}
+  try{const session=await requireSession();if(!navigator.onLine)throw new Error('Нет подключения к интернету');forceSnapshot=true;const result=await refreshWithCalendar({sync,calendar:()=>apiJson(CALENDAR_SYNC_URL+'/google/sync',{method:'POST',headers:{Authorization:`Bearer ${session.access_token}`}})});indicator.className='pullRefresh done';indicator.replaceChildren();const mark=document.createElement('b'),message=document.createElement('span');mark.textContent=result.calendarError||!result.latest?'!':'✓';message.textContent=result.calendarError?'Расписание обновлено. Google: '+publicError(result.calendarError):!result.latest?'Расписание загружено, но повторная проверка не завершена.':'Обновлено';indicator.append(mark,message);}
   catch(error){offerSessionNotice(error);indicator.className='pullRefresh failed';indicator.replaceChildren();const mark=document.createElement('b'),message=document.createElement('span');mark.textContent='!';message.textContent=publicError(error);indicator.append(mark,message);}
   finally{setTimeout(()=>{indicator.className='pullRefresh';indicator.style.setProperty('--pull','0px');pullRefreshing=false},2000);}
 }
