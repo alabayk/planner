@@ -1,15 +1,16 @@
 import {readCompactSnapshot} from '../public/compact-sync.mjs';
 
-// Best-effort isolate cache, not a source of truth: every cycle checks DB revisions.
-// A cold isolate or a periodic/manual full refresh safely rebuilds it without SQL.
-export function createCalendarSnapshotReader(admin,{now=()=>Date.now(),fullRefreshMs=30*60000,maxBytes=8*1024*1024}={}){
+// Cache is never a source of truth: every cycle still checks DB revisions.
+// Restore cold isolates before checking revisions; daily/manual rebuilds also
+// recover maintenance edits that did not increment an event version.
+export function createCalendarSnapshotReader(admin,{now=()=>Date.now(),fullRefreshMs=24*60*60000,maxBytes=8*1024*1024,storage}={}){
   let scope;
   return async function read(env,{force=false}={}){
     if(!scope||scope.url!==env.SUPABASE_URL||scope.key!==env.SUPABASE_SERVICE_ROLE_KEY)
-      scope={url:env.SUPABASE_URL,key:env.SUPABASE_SERVICE_ROLE_KEY,rows:[],fullAt:null,running:null};
+      scope={url:env.SUPABASE_URL,key:env.SUPABASE_SERVICE_ROLE_KEY,rows:[],fullAt:null,running:null,initialized:false};
     const state=scope;
     if(state.running)return state.running;
-    const full=force||state.fullAt===null||now()-state.fullAt>=fullRefreshMs;
+    const cacheKey=JSON.stringify([state.url,state.key]);
     const client={from(table){
       const query=new URLSearchParams();
       return {
@@ -22,9 +23,18 @@ export function createCalendarSnapshotReader(admin,{now=()=>Date.now(),fullRefre
       };
     }};
     state.running=(async()=>{
+      if(!state.initialized){
+        state.initialized=true;
+        try{
+          const saved=await storage?.get(cacheKey);
+          if(Array.isArray(saved?.rows)&&Number.isFinite(saved.fullAt)&&saved.fullAt<=now()&&new TextEncoder().encode(JSON.stringify(saved.rows)).byteLength<=maxBytes){state.rows=saved.rows;state.fullAt=saved.fullAt;}
+        }catch{} // Cache failure must never prevent a fresh database read.
+      }
+      const full=force||state.fullAt===null||now()-state.fullAt>=fullRefreshMs;
       const result=await readCompactSnapshot(client,{table:'planner_events',cached:state.rows,force:full});
       if(new TextEncoder().encode(JSON.stringify(result.rows)).byteLength<=maxBytes){
         state.rows=result.rows;if(full)state.fullAt=now();
+        try{await storage?.set(cacheKey,{rows:state.rows,fullAt:state.fullAt});}catch{}
       }else{state.rows=[];state.fullAt=null;}
       return result.rows.map(row=>({...row}));
     })();

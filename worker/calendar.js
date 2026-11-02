@@ -8,9 +8,9 @@ import {CALENDAR_FIELDS,calendarSnapshot,readSignature,recordConflict,compareAnd
 const GOOGLE = "https://www.googleapis.com/calendar/v3";
 const BOTH = "\n[[planner:both]]";
 const MAX_WRITES = 10;
-const calendarRows=createCalendarSnapshotReader(admin);
+const calendarRows=createCalendarSnapshotReader(admin,{storage:googleCacheStorage('planner-rows-v1')});
 let calendarCycle=null;
-const googleDelta=createGoogleDeltaReader({storage:googleCacheStorage()}),calendarLinks=createLinkReader(admin);
+const googleDelta=createGoogleDeltaReader({storage:googleCacheStorage()}),calendarLinks=createLinkReader(admin,{storage:googleCacheStorage('planner-links-v1')});
 
 const ownerOf = user => (user?.email || "").split("@")[0];
 const ordinary = row => !(row.notes || "").startsWith("[[invitation]]") && row.notes !== "__todo__" && !(row.notes || "").startsWith("[[deadline]]");
@@ -226,7 +226,7 @@ export async function handleCalendarRequest(request, env, user) {
       seen.add(entry.planner_id);
       conflicts.push({id:entry.id,title:payload.local.title,local:payload.local,remote:payload.remote});
     }catch{}
-    return Response.json({syncRevision:77,traffic:trafficBudget(env),connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
+    return Response.json({syncRevision:78,traffic:trafficBudget(env),connected:Boolean(row?.calendar_id)&&!requiresReconnect,requiresReconnect,checkError,updatedAt:row?.updated_at||null,conflicts},{headers:{'Access-Control-Allow-Origin':'*'}});
   }
   if(url.pathname==='/google/resolve'&&request.method==='POST'){
     const headers={'Access-Control-Allow-Origin':'*'};

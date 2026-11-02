@@ -49,6 +49,34 @@ test('oversized snapshots are not retained in worker memory',async()=>{
   const f=fixture([event('a')]),read=createCalendarSnapshotReader(f.admin,{maxBytes:10});await read(env);f.calls.length=0;
   await read(env);assert.equal(f.calls.filter(c=>c.selection==='*').length,1);
 });
+test('cold isolates restore descriptions but still verify revisions, changes and removals',async()=>{
+  const saved=new Map(),storage={get:async key=>structuredClone(saved.get(key)),set:async(key,value)=>saved.set(key,structuredClone(value))};
+  const f=fixture([event('a'),event('b')]);
+  await createCalendarSnapshotReader(f.admin,{storage})(env);f.calls.length=0;
+  const cold=createCalendarSnapshotReader(f.admin,{storage});
+  assert.equal((await cold(env)).length,2);assert.deepEqual(f.calls.map(c=>c.selection),['id,version,updated_at']);
+  f.set([{...event('a',2),title:'Changed'},event('c')]);f.calls.length=0;
+  const updated=await createCalendarSnapshotReader(f.admin,{storage})(env);
+  assert.deepEqual(updated.map(row=>row.id),['a','c']);assert.equal(updated[0].title,'Changed');
+  assert.equal(f.calls.filter(c=>c.selection==='*').length,1);
+});
+test('persistent snapshot keeps full-refresh age across isolates and isolates credentials',async()=>{
+  let clock=0;const saved=new Map(),storage={get:async key=>structuredClone(saved.get(key)),set:async(key,value)=>saved.set(key,structuredClone(value))};
+  const f=fixture([event('a')]),options={storage,now:()=>clock,fullRefreshMs:100};
+  await createCalendarSnapshotReader(f.admin,options)(env);
+  f.set([{...event('a'),title:'Unversioned'}]);clock=50;
+  assert.equal((await createCalendarSnapshotReader(f.admin,options)(env))[0].title,'Event');
+  clock=101;assert.equal((await createCalendarSnapshotReader(f.admin,options)(env))[0].title,'Unversioned');
+  f.calls.length=0;await createCalendarSnapshotReader(f.admin,options)({...env,SUPABASE_SERVICE_ROLE_KEY:'other'});
+  assert.equal(f.calls.filter(c=>c.selection==='*').length,1);
+});
+test('storage outage is best effort and database errors still reject with a persisted snapshot',async()=>{
+  const f=fixture([event('a')]),storage={get:async()=>{throw Error('cache down');},set:async()=>{throw Error('cache down');}};
+  assert.equal((await createCalendarSnapshotReader(f.admin,{storage})(env)).length,1);
+  let saved;const working={get:async()=>saved,set:async(_key,value)=>saved=structuredClone(value)};
+  await createCalendarSnapshotReader(f.admin,{storage:working})(env);f.set([event('a',2)]);f.fail(true);
+  await assert.rejects(createCalendarSnapshotReader(f.admin,{storage:working})(env),/network/);
+});
 test('overlapping calendar cycles share one backend read and one Google scan',async()=>{
   const original=globalThis.fetch;let tokenReads=0,googleReads=0;
   const settings={...env,SUPABASE_URL:'https://concurrent.test',GOOGLE_CLIENT_ID:'client',GOOGLE_CLIENT_SECRET:'secret'};

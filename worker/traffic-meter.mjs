@@ -28,5 +28,5 @@ export async function flushTraffic(env){
 export function trafficBudget(env){
   const state=trafficState(env),bytes=(state.total||0)+state.bytes+(state.pending?.byte_count||0);
   const dayBytes=state.dayTotal+state.bytes+(state.pending?.byte_count||0);
-  return {month:state.month,bytes,dayBytes,measured:state.total!==null,warning:bytes>=3e9||dayBytes>=1e8,economy:bytes>=4e9||dayBytes>=15e7};
+  return {month:state.month,bytes,dayBytes,measured:state.total!==null,warning:bytes>=1e9||dayBytes>=5e7,economy:bytes>=2e9||dayBytes>=1e8};
 }
