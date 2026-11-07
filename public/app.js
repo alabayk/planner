@@ -6,7 +6,7 @@ import {escapeHtml,writeTransaction} from './ui-safety.mjs';
 import {createDeadlineScheduler} from './deadline-scheduler.mjs';
 import {createSharedNotifications} from './shared-notifications.mjs';
 import {createProfileRestore} from './profile-restore.mjs';
-import {WEEKLY_SCHEDULE,SCHEDULE_WEEK,SCHEDULE_VERSION,queueWeeklySchedule,scheduleConfirmed} from './schedule-20261026.mjs';
+import {WEEKLY_SCHEDULE,SCHEDULE_WEEK,SCHEDULE_VERSION,queueWeeklySchedule,scheduleConfirmed} from './schedule-20261109.mjs';
 import {readCompactSnapshot} from './compact-sync.mjs';
 import {createLiveSync} from './live-sync.mjs';
 import {installUpcoming} from './upcoming.mjs';
